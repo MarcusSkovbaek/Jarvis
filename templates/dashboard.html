@@ -1,0 +1,213 @@
+{#
+  dashboard.html — the whole UI.
+
+  Three sections, in the order the brief specifies:
+    1. Awaiting your reply  (overdue inbound)
+    2. No response received (sent, awaiting reply, grouped by age band)
+    3. Upcoming meetings    (calendar)
+
+  All CSS and JS is served from /static. There is not a single external
+  reference in this file — the page renders with no network connection.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jarvis</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="icon" href="data:,">
+</head>
+<body data-refresh-seconds="{{ refresh_seconds }}"
+      data-api-prefix="{{ config.API_PREFIX }}">
+
+<header class="topbar">
+  <div class="topbar__title">
+    <h1>Jarvis</h1>
+    <span class="topbar__user">{{ view.settings.USER_EMAIL }}</span>
+  </div>
+  <div class="topbar__meta">
+    <span class="topbar__sync" id="last-sync">
+      {% if view.last_sync %}
+        Last sync: {{ view.last_sync.at_display }}
+        {% if view.last_sync.status != 'ok' %}
+          <span class="badge badge--error">sync failed</span>
+        {% endif %}
+      {% else %}
+        No sync has run yet
+      {% endif %}
+    </span>
+    <button type="button" class="btn" id="sync-now">Sync now</button>
+    <button type="button" class="btn" id="toggle-settings">Settings</button>
+  </div>
+</header>
+
+{% if view.last_sync and view.last_sync.status != 'ok' %}
+  <div class="banner banner--warn">
+    Last sync failed: {{ view.last_sync.error }}
+    {% if view.last_successful_sync %}
+      Showing cached results from {{ view.last_successful_sync.at_display }}.
+    {% endif %}
+  </div>
+{% endif %}
+
+<div class="banner banner--info" id="toast" hidden></div>
+
+{# ------------------------------------------------------------------ #}
+{# Settings panel                                                      #}
+{# ------------------------------------------------------------------ #}
+<section class="panel settings" id="settings-panel" hidden>
+  <h2>Settings</h2>
+  <p class="muted">
+    All values are read from config.py. Edit that file and restart Jarvis to
+    change them.
+  </p>
+  <table class="settings__table">
+    {% for key, value in view.settings.items() %}
+      <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+    {% endfor %}
+  </table>
+
+  <h3>Local database</h3>
+  <table class="settings__table">
+    {% for key, value in view.stats.items() %}
+      <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+    {% endfor %}
+  </table>
+
+  <div class="settings__actions">
+    <button type="button" class="btn" id="purge-now">
+      Clear old records (older than {{ view.settings.RETENTION_DAYS }} days)
+    </button>
+    <span class="muted">
+      Saved PrivateGPT responses are kept indefinitely and are not affected.
+    </span>
+  </div>
+</section>
+
+{# ------------------------------------------------------------------ #}
+{# 1. Awaiting your reply                                              #}
+{# ------------------------------------------------------------------ #}
+<section class="panel" id="section-overdue">
+  <h2>
+    {{ view.titles[config.CATEGORY_OVERDUE_INBOUND] }}
+    <span class="count">{{ view.counts[config.CATEGORY_OVERDUE_INBOUND] }}</span>
+    {% if view.counts.high_priority %}
+      <span class="badge badge--high">{{ view.counts.high_priority }} high priority</span>
+    {% endif %}
+  </h2>
+  <p class="muted">
+    Sent to you directly, unanswered for more than
+    {{ view.settings.INBOUND_OVERDUE_DAYS }} days.
+  </p>
+
+  {% if not view.overdue_inbound %}
+    <p class="empty">Nothing waiting on you. </p>
+  {% else %}
+    <ul class="rows">
+      {% for item in view.overdue_inbound %}
+        {% set category = config.CATEGORY_OVERDUE_INBOUND %}
+        {% include 'row.html' %}
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------ #}
+{# 2. No response received                                             #}
+{# ------------------------------------------------------------------ #}
+<section class="panel" id="section-awaiting">
+  <h2>
+    {{ view.titles[config.CATEGORY_AWAITING_REPLY] }}
+    <span class="count">{{ view.counts[config.CATEGORY_AWAITING_REPLY] }}</span>
+  </h2>
+  <p class="muted">
+    Your last message in the thread, with no reply after
+    {{ view.settings.SENT_AWAITING_REPLY_DAYS }} days.
+  </p>
+
+  {% if not view.awaiting_reply %}
+    <p class="empty">Everyone has replied. </p>
+  {% else %}
+    {# band['items'] is subscripted, not dotted: band is a dict, and band.items
+       would resolve to the dict's items() method rather than the key. #}
+    {% for band in view.awaiting_reply_bands %}
+      {% if band['items'] %}
+        <h3 class="band">{{ band.label }} <span class="count">{{ band['items']|length }}</span></h3>
+        <ul class="rows">
+          {% for item in band['items'] %}
+            {% set category = config.CATEGORY_AWAITING_REPLY %}
+            {% include 'row.html' %}
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------ #}
+{# 3. Upcoming meetings                                                #}
+{# ------------------------------------------------------------------ #}
+<section class="panel" id="section-meetings">
+  <h2>
+    {{ view.titles[config.CATEGORY_MEETING] }}
+    <span class="count">{{ view.counts[config.CATEGORY_MEETING] }}</span>
+    {% if view.counts.meetings_pending %}
+      <span class="badge badge--pending">{{ view.counts.meetings_pending }} pending</span>
+    {% endif %}
+    {% if view.counts.meetings_unprepared %}
+      <span class="badge badge--warn">{{ view.counts.meetings_unprepared }} unprepared</span>
+    {% endif %}
+  </h2>
+  <p class="muted">
+    Today and the next {{ view.settings.CALENDAR_LOOKAHEAD_DAYS }} days.
+    Read-only — clicking a meeting opens it in Outlook.
+  </p>
+
+  {% if not view.meetings %}
+    <p class="empty">No meetings scheduled.</p>
+  {% else %}
+    <ul class="rows rows--meetings">
+      {% for meeting in view.meetings %}
+        <li class="row row--meeting{% if meeting.unprepared %} row--warn{% endif %}"
+            data-entry-id="{{ meeting.entry_id }}">
+          <div class="row__main js-open-item" data-entry-id="{{ meeting.entry_id }}"
+               title="Open in Outlook">
+            <div class="row__line1">
+              <span class="row__subject">{{ meeting.subject }}</span>
+              {% if meeting.recurring %}<span class="chip">recurring</span>{% endif %}
+              {% if meeting.pending_response %}
+                <span class="badge badge--pending">Not accepted or declined</span>
+              {% endif %}
+              {% if meeting.unprepared %}
+                <span class="badge badge--warn">No prep found</span>
+              {% endif %}
+            </div>
+            <div class="row__line2">
+              <span>{{ meeting.date_display }}</span>
+              <span>{{ meeting.duration_display }}</span>
+              <span>{{ meeting.organizer }}</span>
+              <span>{{ meeting.attendee_count }} attendees</span>
+              <span class="status status--{{ meeting.response_label|lower|replace(' ', '-') }}">
+                {{ meeting.response_label }}
+              </span>
+              {% if meeting.location %}<span>{{ meeting.location }}</span>{% endif %}
+            </div>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+<footer class="footer">
+  <span>
+    Everything on this page is local. Nothing leaves this machine unless you
+    click “Copy PrivateGPT prompt” and paste it yourself.
+  </span>
+  <span>Prompt template v{{ view.settings.PROMPT_VERSION }}</span>
+</footer>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Runtime state — created next to the app, never committed
+jarvis.db
+jarvis.db-journal
+sync.log
+probe-output.txt
+
+# Build output
+build/
+dist/Jarvis.exe
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+jarvis-env/
+.venv/
+venv/

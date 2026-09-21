@@ -1,0 +1,67 @@
+{#
+  row.html — one email row, shared by both email sections.
+
+  Expects `item` (a cached result dict) and `category`.
+
+  The collapsible PrivateGPT panel lives inside the row and is revealed by
+  "Copy PrivateGPT prompt". The rendered card inside it always comes from
+  response_card.html, never from markup written here.
+#}
+<li class="row row--{{ item.priority|default('normal') }}"
+    data-category="{{ category }}"
+    data-conversation-id="{{ item.conversation_id }}"
+    data-entry-id="{{ item.entry_id }}"
+    data-reply-entry-id="{{ item.reply_entry_id }}"
+    data-subject="{{ item.subject }}">
+
+  <div class="row__main js-open-item" data-entry-id="{{ item.entry_id }}"
+       title="Open in Outlook">
+    <div class="row__line1">
+      <span class="row__subject">{{ item.subject }}</span>
+      {% if item.has_attachments %}
+        <span class="clip" title="{{ item.attachments|join(', ') }}">&#128206;</span>
+      {% endif %}
+      {% if item.priority == 'high' %}<span class="badge badge--high">?</span>{% endif %}
+      {% if item.forwarded %}<span class="chip">forwarded</span>{% endif %}
+      {% if item.unread %}<span class="chip chip--unread">unread</span>{% endif %}
+    </div>
+    <div class="row__line2">
+      <span class="row__who">{{ item.counterparty_display }}</span>
+      <span>{{ item.date_display }}</span>
+      <span class="row__days">{{ item.days_waiting }} day{{ '' if item.days_waiting == 1 else 's' }} waiting</span>
+      {% if item.has_attachments %}
+        <span class="row__attachments">{{ item.attachments|join(', ') }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="row__actions">
+    <button type="button" class="btn js-snooze">Snooze {{ config.SNOOZE_DAYS }} days</button>
+    <button type="button" class="btn js-dismiss">No reply needed</button>
+    <button type="button" class="btn btn--primary js-copy-prompt">Copy PrivateGPT prompt</button>
+  </div>
+
+  {# Collapsible response panel — revealed by "Copy PrivateGPT prompt". #}
+  <div class="gpt-panel" {% if not item.saved_response %}hidden{% endif %}>
+    {# The id is built from the conversation, not a loop counter: `loop` is not
+       exported into an include's scope, and age-band grouping would restart it. #}
+    <label class="gpt-panel__label" for="resp-{{ category }}-{{ item.conversation_id }}">
+      Paste PrivateGPT response here
+    </label>
+    <textarea class="gpt-panel__input js-response-input"
+              id="resp-{{ category }}-{{ item.conversation_id }}"
+              rows="8"
+              placeholder="SITUATION: ...&#10;ACTION: ...&#10;DRAFT REPLY: ...&#10;URGENCY: ..."></textarea>
+    <div class="gpt-panel__actions">
+      <button type="button" class="btn btn--primary js-save-response">Save and render</button>
+      <span class="gpt-panel__error" hidden></span>
+    </div>
+    <div class="gpt-panel__card">
+      {% if item.saved_response %}
+        {% with card = item.saved_response %}
+          {% include 'response_card.html' %}
+        {% endwith %}
+      {% endif %}
+    </div>
+  </div>
+</li>

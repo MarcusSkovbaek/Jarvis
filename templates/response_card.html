@@ -1,0 +1,50 @@
+{#
+  response_card.html — the fixed PrivateGPT response card.
+
+  OWNED BY response_renderer.py. No other module may modify this file.
+  Future AI response features must extend the renderer and this template,
+  never replace them.
+
+  Expects a single variable `card`, built by response_renderer.build_card().
+#}
+<div class="response-card" data-entry-id="{{ card.entry_id }}">
+  <div class="response-card__head">
+    <div class="response-card__subject">SUBJECT: {{ card.subject }}</div>
+    <div class="response-card__days">DAYS WAITING: {{ card.days_waiting }}</div>
+  </div>
+
+  <div class="response-card__section">
+    <h4 class="response-card__label">SITUATION</h4>
+    <p class="response-card__text">{{ card.situation }}</p>
+  </div>
+
+  <div class="response-card__section response-card__meta">
+    <div>
+      <span class="response-card__label">ACTION:</span>
+      <span class="badge badge--action">{{ card.action_label }}</span>
+    </div>
+    <div>
+      <span class="response-card__label">URGENCY:</span>
+      <span class="badge badge--urgency-{{ card.urgency|lower }}">{{ card.urgency }}</span>
+      {% if card.urgency_reason %}<span class="response-card__reason">— {{ card.urgency_reason }}</span>{% endif %}
+    </div>
+  </div>
+
+  <div class="response-card__section">
+    <div class="response-card__draft-head">
+      <h4 class="response-card__label">DRAFT REPLY</h4>
+      {% if card.has_draft %}
+        <button type="button"
+                class="btn btn--primary js-open-reply"
+                data-entry-id="{{ card.reply_entry_id }}">
+          Open reply in Outlook
+        </button>
+      {% endif %}
+    </div>
+    <pre class="response-card__draft">{{ card.draft_reply if card.has_draft else 'N/A' }}</pre>
+  </div>
+
+  {% if card.saved_at %}
+    <div class="response-card__foot">Saved {{ card.saved_at_display or card.saved_at }}</div>
+  {% endif %}
+</div>
