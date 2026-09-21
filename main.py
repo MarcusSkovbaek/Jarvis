@@ -37,14 +37,39 @@ def parse_args(argv=None):
     parser.add_argument("--version", action="store_true",
                         help="print version details and exit")
     parser.add_argument("--probe", action="store_true",
-                        help="read-only probe of the real mailbox; prints what "
-                             "Jarvis sees and exits. Starts no server and "
-                             "writes no files.")
+                        help="read-only probe of the real mailbox; reports "
+                             "what Jarvis sees and exits. Starts no server "
+                             "and touches nothing in Outlook. Writes the "
+                             "report next to the app as probe-output.txt.")
     parser.add_argument("--full", action="store_true",
                         help="with --probe: print more sample rows")
     parser.add_argument("--redact", action="store_true",
-                        help="with --probe: mask addresses and subjects")
+                        help="with --probe: accepted and ignored; redaction "
+                             "is on by default")
+    parser.add_argument("--no-redact", dest="no_redact", action="store_true",
+                        help="with --probe: do NOT replace addresses, "
+                             "subjects and bodies with stand-ins. The report "
+                             "then contains real mail data - for your eyes "
+                             "only, not for sharing.")
+    parser.add_argument("--report", default=None,
+                        help="with --probe: write the report here instead of "
+                             "probe-output.txt")
     return parser.parse_args(argv)
+
+
+def _is_loopback(host):
+    """True only for addresses that cannot be reached from another machine."""
+    import ipaddress
+
+    if not host:
+        return False
+    name = str(host).strip().strip("[]").lower()
+    if name in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
 
 
 def _port_status(host, port):
@@ -99,13 +124,26 @@ def main(argv=None):
     if args.probe:
         # Read-only diagnostic: no server, no database, no log file beyond
         # what logging already opened. Defaults to the real mailbox, because
-        # that is the only thing worth probing.
+        # that is the only thing worth probing, and to redacted output,
+        # because a report that is unsafe to share by default is a report
+        # that eventually gets shared unsafely.
         import probe
-        return probe.run(full=args.full, redact=args.redact,
-                         backend=args.backend or "com")
+        return probe.run(full=args.full, redact=not args.no_redact,
+                         backend=args.backend or "com",
+                         report_path=args.report)
 
     sync.log_startup_banner(log, extra=[f"log level         : {args.log_level or
                                         ('DEBUG' if args.debug else 'INFO')}"])
+
+    # Jarvis is a local tool and the dashboard has no authentication, so
+    # binding it anywhere but loopback would publish the contents of the
+    # mailbox to the network. Refuse rather than warn: a warning scrolls past.
+    if not _is_loopback(args.host):
+        log.error("Refusing to bind to %s.", args.host)
+        log.error("  The dashboard has no login and shows your mail, so it is "
+                  "served to this machine only.")
+        log.error("  Use --host 127.0.0.1 (the default), or localhost.")
+        return 2
 
     # The port is checked BEFORE the database is touched, so a launch that
     # cannot serve leaves nothing behind. Without this the user gets a raw

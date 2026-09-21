@@ -23,6 +23,8 @@ SCRIPTS = [
     ("sync.py + prompt_builder.py + response_renderer.py",
      "verify_sync_prompt_response.py"),
     ("app.py + api.py + templates", "verify_web.py"),
+    ("nothing reaches the network", "verify_no_egress.py"),
+    ("the shareable probe report leaks nothing", "verify_probe_redaction.py"),
 ]
 
 

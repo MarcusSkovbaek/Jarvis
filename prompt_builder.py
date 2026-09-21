@@ -54,14 +54,20 @@ def _clean(text):
 
 
 def format_participants(item):
-    """'Name <address>' for everyone on the thread, the user included."""
+    """'Name <address>' for everyone on the thread, the user included.
+
+    The user's own address comes from config, unless the row carries a
+    "user_email" of its own. Only the redacted probe sets that, so a real
+    prompt is unaffected; without it the probe would print the one address
+    redaction is most obliged to hide.
+    """
     people = list(item.get("participants") or [])
     if not people:
         people = [
             f"{p.get('name') or p.get('address')} <{p.get('address')}>"
             for p in item.get("counterparties") or []
         ]
-    people.append(f"Me <{config.USER_EMAIL}>")
+    people.append(f"Me <{item.get('user_email') or config.USER_EMAIL}>")
     seen, unique = set(), []
     for person in people:
         key = person.lower()

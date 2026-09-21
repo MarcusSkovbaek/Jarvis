@@ -142,9 +142,25 @@ which is the quickest way to tell which instance is answering on a port.
 python tests\run_all.py
 ```
 
-Six suites against mock data, including `verify_prompt_conformance.py`, which
+Eight suites against mock data, including `verify_prompt_conformance.py`, which
 asserts the generated PrivateGPT prompt matches the build brief **byte for
 byte** — every word, blank line and dash.
+
+Two of the eight exist to check the promises that a reader cannot verify by
+reading the code:
+
+- `verify_no_egress.py` installs a CPython audit hook — which fires for every
+  socket connection, DNS lookup and URL opened anywhere in the process,
+  including inside libraries Jarvis did not write — then drives a full sync,
+  every API endpoint, the dashboard and the probe, and asserts that nothing
+  connected to anything but loopback. It ends with a negative control: it
+  makes one deliberate outbound connection and confirms the hook catches it,
+  so the test cannot pass by failing to look.
+- `verify_probe_redaction.py` takes every address, name, subject, filename and
+  body out of the mock mailbox, runs the probe in its shareable mode, and
+  asserts none of them survive — whole or in fragments — while the things that
+  make the report useful (reply prefixes, file extensions, counts, id shapes)
+  do.
 
 Separately, a black-box acceptance test that launches the compiled .exe in a
 clean directory and drives it over HTTP exactly as the browser does:
