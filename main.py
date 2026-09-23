@@ -150,8 +150,8 @@ def main(argv=None):
                          backend=args.backend or "com",
                          report_path=args.report)
 
-    sync.log_startup_banner(log, extra=[f"log level         : {args.log_level or
-                                        ('DEBUG' if args.debug else 'INFO')}"])
+    level_name = args.log_level or ("DEBUG" if args.debug else "INFO")
+    sync.log_startup_banner(log, extra=[f"log level         : {level_name}"])
 
     # Jarvis is a local tool and the dashboard has no authentication, so
     # binding it anywhere but loopback would publish the contents of the
