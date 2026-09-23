@@ -10,16 +10,25 @@ installed. templates/ and static/ are bundled inside it; jarvis.db and
 sync.log are created next to the .exe at runtime (see config.DATA_DIR).
 """
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
 block_cipher = None
+
+# pywebview drives Edge WebView2 through WebView2Loader.dll and the
+# Microsoft.Web.WebView2.*.dll assemblies it ships in webview/lib. PyInstaller
+# cannot see those through imports, so they are collected explicitly; without
+# them the window fails to open and Jarvis falls back to the browser.
+webview_datas = collect_data_files('webview')
+webview_binaries = collect_dynamic_libs('webview')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=webview_binaries,
     datas=[
         ('templates', 'templates'),
         ('static', 'static'),
-    ],
+    ] + webview_datas,
     hiddenimports=[
         # Selected at runtime by config.OUTLOOK_BACKEND, so PyInstaller's
         # static analysis cannot see these imports.
@@ -28,13 +37,35 @@ a = Analysis(
         'pythoncom',
         'pywintypes',
         'mock_outlook',
-        # Imported lazily inside main() for --probe.
+        # Imported lazily inside main() for --probe and --check-desktop.
         'probe',
+        'redaction',
+        'desktop',
+        'desktop_check',
+        'page_check',
+        # The desktop window: pywebview's WebView2 backend, which it picks at
+        # runtime, and the .NET bridge (pythonnet) that backend is built on.
+        'webview',
+        'webview.platforms.edgechromium',
+        'webview.platforms.winforms',
+        'clr',
+        'clr_loader',
+        'win32clipboard',
+        'win32con',
+        'werkzeug.serving',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # pywebview's other renderers. On Windows only WebView2 is used, and
+        # bundling Qt or GTK would add ~100 MB for nothing.
+        'PyQt5',
+        'PyQt6',
+        'PySide2',
+        'PySide6',
+        'qtpy',
+        'gi',
         'tkinter',
         'matplotlib',
         'numpy',
@@ -69,7 +100,10 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,          # keeps the sync log visible; set False for silent
+    # Kept: --probe and --check-desktop print to it, and in browser mode
+    # closing it is how Jarvis is stopped. In window mode desktop.py hides it
+    # once the window is up, so the app looks like an app.
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

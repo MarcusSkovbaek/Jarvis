@@ -531,11 +531,26 @@ def main():
             ("Last sync:", "last sync timestamp"),
             ("Clear old records", "settings purge button"),
             ("7-14 days", "age band"),
-            ("&#128206;", "attachment paperclip"),
+            ('<span class="clip" title=', "attachment paperclip"),
             ("Not accepted or declined", "pending meeting indicator"),
             ("No prep found", "unprepared meeting flag"),
+            ("Today's focus", "home: today's focus card"),
+            ("Copy dashboard prompt", "home: PrivateGPT dashboard prompt"),
+            ("Check a saved page", "PrivateGPT view: page checker"),
+            ('data-view-link="calendar"', "navigation rail"),
         ]:
             check(f"page contains {label}", needle in page)
+
+        dash = client.get("/api/v1/prompt/dashboard")
+        check("the dashboard prompt is served, with its policy line",
+              dash["ok"] and dash["csp_line"] in dash["prompt"],
+              f"{dash.get('words')} words")
+        verdict = client.post("/api/v1/check-page", {
+            "source": "<html><head></head><body>"
+                      "<script>location.href='https://x.example'</script>"
+                      "</body></html>"})[1]
+        check("the page checker refuses a page that navigates away",
+              verdict.get("verdict") == "unsafe")
 
         css = client.get("/static/style.css", raw=True)
         js = client.get("/static/app.js", raw=True)

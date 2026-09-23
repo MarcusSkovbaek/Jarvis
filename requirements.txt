@@ -1,0 +1,7 @@
+# Runtime
+flask
+pywin32; sys_platform == "win32"     # Outlook (win32com) and the clipboard
+pywebview                            # the desktop window (Edge WebView2 on Windows)
+
+# Building the .exe (Windows only)
+pyinstaller; sys_platform == "win32"

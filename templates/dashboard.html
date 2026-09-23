@@ -1,14 +1,22 @@
 {#
-  dashboard.html — the whole UI.
+  dashboard.html — the whole UI, as one page with five views.
 
-  Three sections, in the order the brief specifies:
-    1. Awaiting your reply  (overdue inbound)
-    2. No response received (sent, awaiting reply, grouped by age band)
-    3. Upcoming meetings    (calendar)
+    Home      the overview: greeting, what needs attention, today's focus,
+              the next day's calendar and the PrivateGPT dashboard prompt
+    Email     the two email sections in full, with every row action
+    Calendar  upcoming meetings in full
+    PrivateGPT  the dashboard prompt, explained, with a preview
+    Settings  config values and housekeeping
 
-  All CSS and JS is served from /static. There is not a single external
-  reference in this file — the page renders with no network connection.
+  All five views are in the page at once and the rail switches between them,
+  so everything works offline, a reload lands on the same view (the view is
+  kept in the URL fragment), and the auto-refresh never loses your place.
+
+  All CSS and JS is served from /static and every icon is inline SVG. There
+  is not a single external reference in this file.
 #}
+{% from 'icons.html' import icon %}
+{% set ov = view.overview %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,26 +27,69 @@
   <link rel="icon" href="data:,">
 </head>
 <body data-refresh-seconds="{{ refresh_seconds }}"
-      data-api-prefix="{{ config.API_PREFIX }}">
+      data-api-prefix="{{ config.API_PREFIX }}"
+      data-view="home">
 
-<header class="topbar">
-  <div class="topbar__title">
-    <h1>Jarvis</h1>
-    <span class="topbar__user">{{ view.settings.USER_EMAIL }}</span>
+<div class="app">
+
+{# ================================================================== #}
+{# Navigation rail                                                    #}
+{# ================================================================== #}
+<nav class="rail" aria-label="Views">
+  <div class="rail__logo" title="Jarvis">{{ icon('sparkle', 22) }}</div>
+  <div class="rail__items">
+    <a class="rail__item is-active" href="#home" data-view-link="home" title="Overview">
+      {{ icon('home', 21) }}<span class="rail__label">Home</span>
+    </a>
+    <a class="rail__item" href="#email" data-view-link="email" title="Email">
+      {{ icon('mail', 21) }}<span class="rail__label">Email</span>
+      {% set email_total = view.counts[config.CATEGORY_OVERDUE_INBOUND] + view.counts[config.CATEGORY_AWAITING_REPLY] %}
+      {% if email_total %}<span class="rail__dot">{{ email_total }}</span>{% endif %}
+    </a>
+    <a class="rail__item" href="#calendar" data-view-link="calendar" title="Calendar">
+      {{ icon('calendar', 21) }}<span class="rail__label">Calendar</span>
+      {% if view.counts.meetings_pending %}<span class="rail__dot">{{ view.counts.meetings_pending }}</span>{% endif %}
+    </a>
+    <a class="rail__item" href="#assistant" data-view-link="assistant" title="PrivateGPT">
+      {{ icon('file', 21) }}<span class="rail__label">PrivateGPT</span>
+    </a>
   </div>
-  <div class="topbar__meta">
-    <span class="topbar__sync" id="last-sync">
+  <a class="rail__item rail__item--bottom" href="#settings" data-view-link="settings"
+     id="toggle-settings" title="Settings">
+    {{ icon('settings', 21) }}<span class="rail__label">Settings</span>
+  </a>
+</nav>
+
+<main class="main">
+
+{# ================================================================== #}
+{# Header                                                             #}
+{# ================================================================== #}
+<header class="hero">
+  <div class="hero__orb" aria-hidden="true"></div>
+  <svg class="hero__waves" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0 120 C 120 60, 240 150, 360 90 S 540 40, 600 70" />
+    <path d="M0 132 C 140 80, 250 160, 380 104 S 540 58, 600 88" />
+    <path d="M0 144 C 160 100, 260 168, 400 118 S 540 76, 600 106" />
+  </svg>
+  <div class="hero__text">
+    <h1 class="hero__greeting">{{ ov.greeting }} <span class="hero__spark">{{ icon('sparkle', 26) }}</span></h1>
+    <p class="hero__headline">{{ ov.headline }}</p>
+    <p class="hero__date">{{ ov.date }}</p>
+  </div>
+  <div class="hero__meta">
+    <span class="hero__sync" id="last-sync">
+      {{ icon('clock', 15) }}
       {% if view.last_sync %}
         Last sync: {{ view.last_sync.at_display }}
         {% if view.last_sync.status != 'ok' %}
-          <span class="badge badge--error">sync failed</span>
+          <span class="pill pill--error">sync failed</span>
         {% endif %}
       {% else %}
         No sync has run yet
       {% endif %}
     </span>
-    <button type="button" class="btn" id="sync-now">Sync now</button>
-    <button type="button" class="btn" id="toggle-settings">Settings</button>
+    <button type="button" class="btn btn--ghost" id="sync-now">{{ icon('refresh', 16) }}<span>Sync now</span></button>
   </div>
 </header>
 
@@ -53,160 +104,454 @@
 
 <div class="banner banner--info" id="toast" hidden></div>
 
-{# ------------------------------------------------------------------ #}
-{# Settings panel                                                      #}
-{# ------------------------------------------------------------------ #}
-<section class="panel settings" id="settings-panel" hidden>
-  <h2>Settings</h2>
-  <p class="muted">
-    All values are read from config.py. Edit that file and restart Jarvis to
-    change them.
-  </p>
-  <table class="settings__table">
-    {% for key, value in view.settings.items() %}
-      <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
-    {% endfor %}
-  </table>
+{# ================================================================== #}
+{# HOME                                                               #}
+{# ================================================================== #}
+<section class="view is-active" data-view="home" id="view-home">
+  <div class="grid grid--home">
 
-  <h3>Local database</h3>
-  <table class="settings__table">
-    {% for key, value in view.stats.items() %}
-      <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
-    {% endfor %}
-  </table>
+    {# ---- Awaiting your reply (summary) ---- #}
+    <article class="card card--email">
+      <header class="card__head">
+        {{ icon('mail') }}
+        <h2 class="card__title">{{ view.titles[config.CATEGORY_OVERDUE_INBOUND] }}</h2>
+        <span class="pill pill--accent card__pill">{{ view.counts[config.CATEGORY_OVERDUE_INBOUND] }} waiting</span>
+      </header>
+      {% if not ov.top_overdue %}
+        <p class="empty">Nothing waiting on you.</p>
+      {% else %}
+        <ul class="mini-list">
+          {% for item in ov.top_overdue %}
+            <li class="mini js-open-item" data-entry-id="{{ item.entry_id }}" title="Open in Outlook">
+              <span class="avatar avatar--{{ item.tone }}">{{ item.initials }}</span>
+              <span class="mini__body">
+                <span class="mini__title">{{ item.subject }}</span>
+                <span class="mini__meta">{{ item.counterparty_display }} · {{ item.days_waiting }} days
+                  {% if item.has_attachments %}<span class="clip" title="{{ item.attachments|join(', ') }}">{{ icon('clip', 13) }}</span>{% endif %}
+                </span>
+              </span>
+              {% if item.priority == 'high' %}
+                <span class="mini__flag" title="Asks you a direct question">{{ icon('question', 16) }}</span>
+              {% elif item.unread %}
+                <span class="mini__dot" title="Unread"></span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+        {% set more = view.counts[config.CATEGORY_OVERDUE_INBOUND] - ov.top_overdue|length %}
+        <a class="card__more" href="#email" data-view-link="email">
+          {% if more > 0 %}{{ more }} more{% else %}Open all{% endif %} {{ icon('chevron', 14) }}
+        </a>
+      {% endif %}
+      <button type="button" class="ai-bar js-copy-dashboard-prompt">
+        {{ icon('sparkle', 18) }}
+        <span>Build a PrivateGPT dashboard from everything here</span>
+      </button>
+    </article>
 
-  <div class="settings__actions">
-    <button type="button" class="btn" id="purge-now">
-      Clear old records (older than {{ view.settings.RETENTION_DAYS }} days)
-    </button>
-    <span class="muted">
-      Saved PrivateGPT responses are kept indefinitely and are not affected.
-    </span>
-  </div>
-</section>
+    {# ---- Calendar (next day with meetings) ---- #}
+    <article class="card card--calendar">
+      <header class="card__head">
+        {{ icon('calendar') }}
+        <h2 class="card__title">Calendar</h2>
+        <span class="card__sub">· {{ ov.day.label if ov.day else 'Upcoming' }}</span>
+        {% if ov.day and ov.day.label not in ('Today',) %}
+          <span class="card__note">{{ ov.day.date }}</span>
+        {% endif %}
+      </header>
+      {% if not ov.day %}
+        <p class="empty">No meetings in the next {{ view.settings.CALENDAR_LOOKAHEAD_DAYS }} days.</p>
+      {% else %}
+        <div class="timeline" style="--hours: {{ ov.day.hour_count }}">
+          <ol class="timeline__axis">
+            {% for label in ov.day.hours %}<li>{{ label }}</li>{% endfor %}
+          </ol>
+          <div class="timeline__track">
+            {% for event in ov.day.events %}
+              <button type="button" class="event event--{{ event.tone }}{% if event.compact %} event--compact{% endif %} js-open-item"
+                      data-entry-id="{{ event.entry_id }}" title="{{ event.subject }} · {{ event.time }} — open in Outlook"
+                      style="top: {{ event.top }}%; height: {{ event.height }}%; left: {{ event.left }}%; width: calc({{ event.width }}% - 4px)">
+                <span class="event__title">{{ event.subject }}</span>
+                <span class="event__time">{% if event.compact %}{{ event.time.split('-')[0] }}{% else %}{{ event.time }}{% if event.location %} · {{ event.location }}{% endif %}{% endif %}</span>
+              </button>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="card__foot">
+          <span class="legend"><i class="legend__dot legend__dot--ok"></i>Answered</span>
+          <span class="legend"><i class="legend__dot legend__dot--pending"></i>Needs answer</span>
+          <span class="legend"><i class="legend__dot legend__dot--unprepared"></i>No prep</span>
+          <a class="card__more" href="#calendar" data-view-link="calendar">
+            {% if ov.day.later %}{{ ov.day.later }} more{% else %}All{% endif %} {{ icon('chevron', 14) }}
+          </a>
+        </div>
+      {% endif %}
+    </article>
 
-{# ------------------------------------------------------------------ #}
-{# 1. Awaiting your reply                                              #}
-{# ------------------------------------------------------------------ #}
-<section class="panel" id="section-overdue">
-  <h2>
-    {{ view.titles[config.CATEGORY_OVERDUE_INBOUND] }}
-    <span class="count">{{ view.counts[config.CATEGORY_OVERDUE_INBOUND] }}</span>
-    {% if view.counts.high_priority %}
-      <span class="badge badge--high">{{ view.counts.high_priority }} high priority</span>
-    {% endif %}
-  </h2>
-  <p class="muted">
-    Sent to you directly, unanswered for more than
-    {{ view.settings.INBOUND_OVERDUE_DAYS }} days.
-  </p>
+    {# ---- PrivateGPT brief ---- #}
+    <article class="card card--brief">
+      <header class="card__head">
+        {{ icon('file') }}
+        <h2 class="card__title">PrivateGPT brief</h2>
+      </header>
+      <div class="brief__art" aria-hidden="true">
+        <svg viewBox="0 0 320 120" preserveAspectRatio="none" class="brief__hills">
+          <path d="M0 120 L0 88 C 50 70, 80 92, 130 74 C 180 56, 210 84, 250 64 C 280 50, 300 58, 320 48 L320 120 Z" />
+          <path d="M0 120 L0 100 C 60 86, 110 108, 170 92 C 220 80, 270 96, 320 82 L320 120 Z" />
+        </svg>
+        <span class="brief__star brief__star--1">{{ icon('sparkle', 12) }}</span>
+        <span class="brief__star brief__star--2">{{ icon('sparkle', 9) }}</span>
+        <span class="brief__badge">{{ icon('file', 26) }}</span>
+      </div>
+      <ul class="brief__points">
+        <li>Summaries, themes and draft replies for every thread</li>
+        <li>Returned as one HTML page you open and work in</li>
+        <li>The page is locked offline: it cannot reach the network</li>
+      </ul>
+      {% set brief_total = view.counts[config.CATEGORY_OVERDUE_INBOUND] + view.counts[config.CATEGORY_AWAITING_REPLY] + view.counts[config.CATEGORY_MEETING] %}
+      <div class="brief__cta">
+        <button type="button" class="btn btn--primary js-copy-dashboard-prompt">
+          {{ icon('copy', 16) }}<span>Copy dashboard prompt</span>
+        </button>
+        <span class="brief__count">{{ brief_total }} item{{ '' if brief_total == 1 else 's' }} included</span>
+      </div>
+      <a class="card__link" href="#assistant" data-view-link="assistant">
+        How it works {{ icon('chevron', 16) }}
+      </a>
+    </article>
 
-  {% if not view.overdue_inbound %}
-    <p class="empty">Nothing waiting on you. </p>
-  {% else %}
-    <ul class="rows">
-      {% for item in view.overdue_inbound %}
-        {% set category = config.CATEGORY_OVERDUE_INBOUND %}
-        {% include 'row.html' %}
-      {% endfor %}
-    </ul>
-  {% endif %}
-</section>
-
-{# ------------------------------------------------------------------ #}
-{# 2. No response received                                             #}
-{# ------------------------------------------------------------------ #}
-<section class="panel" id="section-awaiting">
-  <h2>
-    {{ view.titles[config.CATEGORY_AWAITING_REPLY] }}
-    <span class="count">{{ view.counts[config.CATEGORY_AWAITING_REPLY] }}</span>
-  </h2>
-  <p class="muted">
-    Your last message in the thread, with no reply after
-    {{ view.settings.SENT_AWAITING_REPLY_DAYS }} days.
-  </p>
-
-  {% if not view.awaiting_reply %}
-    <p class="empty">Everyone has replied. </p>
-  {% else %}
-    {# band['items'] is subscripted, not dotted: band is a dict, and band.items
-       would resolve to the dict's items() method rather than the key. #}
-    {% for band in view.awaiting_reply_bands %}
-      {% if band['items'] %}
-        <h3 class="band">{{ band.label }} <span class="count">{{ band['items']|length }}</span></h3>
-        <ul class="rows">
-          {% for item in band['items'] %}
-            {% set category = config.CATEGORY_AWAITING_REPLY %}
-            {% include 'row.html' %}
+    {# ---- No response received (by age) ---- #}
+    <article class="card card--awaiting">
+      <header class="card__head">
+        {{ icon('send') }}
+        <h2 class="card__title">{{ view.titles[config.CATEGORY_AWAITING_REPLY] }}</h2>
+        <span class="card__sub">· Waiting on others</span>
+        <span class="pill pill--blue card__pill">{{ view.counts[config.CATEGORY_AWAITING_REPLY] }} threads</span>
+      </header>
+      {% if not ov.top_awaiting %}
+        <p class="empty">Everyone has replied.</p>
+      {% else %}
+        <ul class="list">
+          {% for item in ov.top_awaiting %}
+            <li class="list__row js-open-item" data-entry-id="{{ item.entry_id }}" title="Open in Outlook">
+              <span class="list__icon list__icon--{{ item.tone }}">{{ icon('mail', 17) }}</span>
+              <span class="list__body">
+                <span class="list__title">{{ item.subject }}
+                  {% if item.has_attachments %}<span class="clip" title="{{ item.attachments|join(', ') }}">{{ icon('clip', 13) }}</span>{% endif %}
+                </span>
+                <span class="list__meta">{{ item.counterparty_display }} · sent {{ item.date_display }}</span>
+              </span>
+              {% set band_class = 'old' if item.days_waiting >= 30 else ('mid' if item.days_waiting >= 14 else 'new') %}
+              <span class="pill pill--age pill--{{ band_class }}">{{ item.days_waiting }} days</span>
+            </li>
           {% endfor %}
         </ul>
       {% endif %}
-    {% endfor %}
-  {% endif %}
+    </article>
+
+    {# ---- Today's focus ---- #}
+    <article class="card card--focus">
+      <header class="card__head">
+        {{ icon('target') }}
+        <h2 class="card__title">Today's focus</h2>
+      </header>
+      {% if not ov.focus %}
+        <p class="empty">Nothing pressing. A good day to get ahead.</p>
+      {% else %}
+        <ol class="focus">
+          {% for f in ov.focus %}
+            <li class="focus__item js-open-item" data-entry-id="{{ f.entry_id }}" title="Open in Outlook">
+              <span class="focus__check">{{ icon('check-circle', 20) }}</span>
+              <span class="focus__body">
+                <span class="focus__title">{{ f.title }}</span>
+                <span class="focus__reason">{{ f.reason }}</span>
+              </span>
+            </li>
+          {% endfor %}
+        </ol>
+      {% endif %}
+      {% if ov.ring %}
+        <div class="score">
+          <div class="score__text">
+            <span class="score__title">Meeting responses</span>
+            <span class="score__sub">{{ ov.ring.answered }} of {{ ov.ring.total }} upcoming meetings answered</span>
+          </div>
+          <svg class="ring" viewBox="0 0 100 100" role="img"
+               aria-label="{{ ov.ring.percent }} percent of meetings answered">
+            <circle class="ring__track" cx="50" cy="50" r="42"/>
+            <circle class="ring__value" cx="50" cy="50" r="42"
+                    stroke-dasharray="{{ ov.ring.dash }} {{ ov.ring.gap }}"/>
+            <text x="50" y="50" class="ring__label">{{ ov.ring.percent }}%</text>
+          </svg>
+        </div>
+      {% endif %}
+    </article>
+
+  </div>
 </section>
 
-{# ------------------------------------------------------------------ #}
-{# 3. Upcoming meetings                                                #}
-{# ------------------------------------------------------------------ #}
-<section class="panel" id="section-meetings">
-  <h2>
-    {{ view.titles[config.CATEGORY_MEETING] }}
-    <span class="count">{{ view.counts[config.CATEGORY_MEETING] }}</span>
-    {% if view.counts.meetings_pending %}
-      <span class="badge badge--pending">{{ view.counts.meetings_pending }} pending</span>
-    {% endif %}
-    {% if view.counts.meetings_unprepared %}
-      <span class="badge badge--warn">{{ view.counts.meetings_unprepared }} unprepared</span>
-    {% endif %}
-  </h2>
-  <p class="muted">
-    Today and the next {{ view.settings.CALENDAR_LOOKAHEAD_DAYS }} days.
-    Read-only — clicking a meeting opens it in Outlook.
-  </p>
+{# ================================================================== #}
+{# EMAIL — both sections in full                                      #}
+{# ================================================================== #}
+<section class="view" data-view="email" id="view-email" hidden>
 
-  {% if not view.meetings %}
-    <p class="empty">No meetings scheduled.</p>
-  {% else %}
-    <ul class="rows rows--meetings">
-      {% for meeting in view.meetings %}
-        <li class="row row--meeting{% if meeting.unprepared %} row--warn{% endif %}"
-            data-entry-id="{{ meeting.entry_id }}">
-          <div class="row__main js-open-item" data-entry-id="{{ meeting.entry_id }}"
-               title="Open in Outlook">
-            <div class="row__line1">
-              <span class="row__subject">{{ meeting.subject }}</span>
-              {% if meeting.recurring %}<span class="chip">recurring</span>{% endif %}
-              {% if meeting.pending_response %}
-                <span class="badge badge--pending">Not accepted or declined</span>
-              {% endif %}
-              {% if meeting.unprepared %}
-                <span class="badge badge--warn">No prep found</span>
-              {% endif %}
-            </div>
-            <div class="row__line2">
-              <span>{{ meeting.date_display }}</span>
-              <span>{{ meeting.duration_display }}</span>
-              <span>{{ meeting.organizer }}</span>
-              <span>{{ meeting.attendee_count }} attendees</span>
-              <span class="status status--{{ meeting.response_label|lower|replace(' ', '-') }}">
-                {{ meeting.response_label }}
-              </span>
-              {% if meeting.location %}<span>{{ meeting.location }}</span>{% endif %}
-            </div>
-          </div>
-        </li>
+  <section class="panel" id="section-overdue">
+    <header class="panel__head">
+      {{ icon('mail') }}
+      <h2>{{ view.titles[config.CATEGORY_OVERDUE_INBOUND] }}</h2>
+      <span class="count">{{ view.counts[config.CATEGORY_OVERDUE_INBOUND] }}</span>
+      {% if view.counts.high_priority %}
+        <span class="pill pill--high">{{ view.counts.high_priority }} high priority</span>
+      {% endif %}
+    </header>
+    <p class="muted">
+      Sent to you directly, unanswered for more than
+      {{ view.settings.INBOUND_OVERDUE_DAYS }} days.
+    </p>
+
+    {% if not view.overdue_inbound %}
+      <p class="empty">Nothing waiting on you.</p>
+    {% else %}
+      <ul class="rows">
+        {% for item in view.overdue_inbound %}
+          {% set category = config.CATEGORY_OVERDUE_INBOUND %}
+          {% include 'row.html' %}
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  <section class="panel" id="section-awaiting">
+    <header class="panel__head">
+      {{ icon('send') }}
+      <h2>{{ view.titles[config.CATEGORY_AWAITING_REPLY] }}</h2>
+      <span class="count">{{ view.counts[config.CATEGORY_AWAITING_REPLY] }}</span>
+    </header>
+    <p class="muted">
+      Your last message in the thread, with no reply after
+      {{ view.settings.SENT_AWAITING_REPLY_DAYS }} days.
+    </p>
+
+    {% if not view.awaiting_reply %}
+      <p class="empty">Everyone has replied.</p>
+    {% else %}
+      {# band['items'] is subscripted, not dotted: band is a dict, and band.items
+         would resolve to the dict's items() method rather than the key. #}
+      {% for band in view.awaiting_reply_bands %}
+        {% if band['items'] %}
+          <h3 class="band">{{ band.label }} <span class="count">{{ band['items']|length }}</span></h3>
+          <ul class="rows">
+            {% for item in band['items'] %}
+              {% set category = config.CATEGORY_AWAITING_REPLY %}
+              {% include 'row.html' %}
+            {% endfor %}
+          </ul>
+        {% endif %}
       {% endfor %}
-    </ul>
-  {% endif %}
+    {% endif %}
+  </section>
+</section>
+
+{# ================================================================== #}
+{# CALENDAR — upcoming meetings in full                               #}
+{# ================================================================== #}
+<section class="view" data-view="calendar" id="view-calendar" hidden>
+  <section class="panel" id="section-meetings">
+    <header class="panel__head">
+      {{ icon('calendar') }}
+      <h2>{{ view.titles[config.CATEGORY_MEETING] }}</h2>
+      <span class="count">{{ view.counts[config.CATEGORY_MEETING] }}</span>
+      {% if view.counts.meetings_pending %}
+        <span class="pill pill--pending">{{ view.counts.meetings_pending }} pending</span>
+      {% endif %}
+      {% if view.counts.meetings_unprepared %}
+        <span class="pill pill--warn">{{ view.counts.meetings_unprepared }} unprepared</span>
+      {% endif %}
+    </header>
+    <p class="muted">
+      Today and the next {{ view.settings.CALENDAR_LOOKAHEAD_DAYS }} days.
+      Read-only — clicking a meeting opens it in Outlook.
+    </p>
+
+    {% if not view.meetings %}
+      <p class="empty">No meetings scheduled.</p>
+    {% else %}
+      <ul class="rows rows--meetings">
+        {% for meeting in view.meetings %}
+          <li class="row row--meeting{% if meeting.unprepared %} row--warn{% endif %}"
+              data-entry-id="{{ meeting.entry_id }}">
+            <div class="row__main js-open-item" data-entry-id="{{ meeting.entry_id }}"
+                 title="Open in Outlook">
+              <div class="row__when">
+                <span class="row__when-day">{{ meeting.date_display.split(',')[0] }}</span>
+                <span class="row__when-time">{{ meeting.date_display.split(', ')[-1] }}</span>
+              </div>
+              <div class="row__text">
+                <div class="row__line1">
+                  <span class="row__subject">{{ meeting.subject }}</span>
+                  {% if meeting.recurring %}<span class="chip">recurring</span>{% endif %}
+                  {% if meeting.pending_response %}
+                    <span class="pill pill--pending">Not accepted or declined</span>
+                  {% endif %}
+                  {% if meeting.unprepared %}
+                    <span class="pill pill--warn">No prep found</span>
+                  {% endif %}
+                </div>
+                <div class="row__line2">
+                  <span>{{ meeting.duration_display }}</span>
+                  <span>{{ meeting.organizer }}</span>
+                  <span>{{ meeting.attendee_count }} attendees</span>
+                  <span class="status status--{{ meeting.response_label|lower|replace(' ', '-') }}">
+                    {{ meeting.response_label }}
+                  </span>
+                  {% if meeting.location %}<span>{{ meeting.location }}</span>{% endif %}
+                </div>
+              </div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+</section>
+
+{# ================================================================== #}
+{# PRIVATEGPT — the dashboard prompt                                  #}
+{# ================================================================== #}
+<section class="view" data-view="assistant" id="view-assistant" hidden>
+  <section class="panel panel--assistant">
+    <header class="panel__head">
+      {{ icon('sparkle') }}
+      <h2>PrivateGPT dashboard</h2>
+      <span class="pill pill--accent">Prompt v{{ view.settings.DASHBOARD_PROMPT_VERSION }}</span>
+    </header>
+    <p class="lead">
+      Everything above works without AI. When you want more — a summary of
+      every thread, themes across them, suggested actions and draft replies —
+      Jarvis can hand the whole overview to PrivateGPT in one prompt, and
+      PrivateGPT returns it as a page you can work in.
+    </p>
+
+    <ol class="steps">
+      <li class="step">
+        <span class="step__n">1</span>
+        <div>
+          <h3>Copy the prompt</h3>
+          <p>It contains every item on your dashboard: subjects, people, days
+            waiting and a short excerpt of each message.</p>
+          <button type="button" class="btn btn--primary js-copy-dashboard-prompt">
+            {{ icon('copy', 16) }}<span>Copy dashboard prompt</span>
+          </button>
+          <span class="step__stat" id="dashboard-prompt-stat"></span>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step__n">2</span>
+        <div>
+          <h3>Paste it into PrivateGPT</h3>
+          <p>PrivateGPT answers with one block of HTML. Use its copy button
+            to copy the whole block.</p>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step__n">3</span>
+        <div>
+          <h3>Save it as a page</h3>
+          <p>Paste into Notepad and save as <code>jarvis-overview.html</code>
+            (set "Save as type" to <em>All files</em>).</p>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step__n">4</span>
+        <div>
+          <h3>Check it, then open it</h3>
+          <p>Pick the saved file here. Jarvis reads it on this computer and
+            tells you whether it is safe to open. If it is, double-click the
+            file; it opens in your browser and keeps your ticks for the day.</p>
+          <label class="btn btn--primary file-pick">
+            {{ icon('shield', 16) }}<span>Check a saved page…</span>
+            <input type="file" id="page-check-input" accept=".html,.htm,.txt" hidden>
+          </label>
+        </div>
+      </li>
+    </ol>
+
+    <div class="verdict" id="page-check-result" hidden></div>
+
+    <div class="safety">
+      <span class="safety__icon">{{ icon('shield', 22) }}</span>
+      <div>
+        <h3>How the page is kept from sending anything</h3>
+        <p>The prompt requires this exact line at the top of the page:</p>
+        <code class="safety__csp">{{ csp_line }}</code>
+        <p>It is a Content-Security-Policy. It makes the browser refuse
+          everything the page tries to load or send — web fonts, scripts,
+          images, frames, form posts, background requests — so an accidental
+          link to the internet simply does nothing.</p>
+        <p>One thing a policy line cannot stop is a page moving itself to a
+          different web address, which could carry data with it. That is what
+          step 4 is for: Jarvis reads the file and refuses it if the policy
+          line is missing or misplaced, if anything points outside the page,
+          or if any script tries to navigate or open a window. Only open a
+          page Jarvis has passed.</p>
+      </div>
+    </div>
+
+    <details class="preview">
+      <summary>Preview the prompt</summary>
+      <textarea class="preview__text" id="dashboard-prompt-preview" readonly rows="18"
+                placeholder="Click 'Copy dashboard prompt' to generate it."></textarea>
+    </details>
+  </section>
+</section>
+
+{# ================================================================== #}
+{# SETTINGS                                                           #}
+{# ================================================================== #}
+<section class="view" data-view="settings" id="view-settings" hidden>
+  <section class="panel settings" id="settings-panel">
+    <header class="panel__head">
+      {{ icon('settings') }}
+      <h2>Settings</h2>
+    </header>
+    <p class="muted">
+      All values are read from config.py. Edit that file and restart Jarvis to
+      change them.
+    </p>
+    <table class="settings__table">
+      {% for key, value in view.settings.items() %}
+        <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+      {% endfor %}
+    </table>
+
+    <h3>Local database</h3>
+    <table class="settings__table">
+      {% for key, value in view.stats.items() %}
+        <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+      {% endfor %}
+    </table>
+
+    <div class="settings__actions">
+      <button type="button" class="btn" id="purge-now">
+        Clear old records (older than {{ view.settings.RETENTION_DAYS }} days)
+      </button>
+      <span class="muted">
+        Saved PrivateGPT responses are kept indefinitely and are not affected.
+      </span>
+    </div>
+  </section>
 </section>
 
 <footer class="footer">
-  <span>
-    Everything on this page is local. Nothing leaves this machine unless you
-    click “Copy PrivateGPT prompt” and paste it yourself.
+  <span>{{ icon('shield', 14) }}
+    Everything here is local. Nothing leaves this computer unless you copy a
+    PrivateGPT prompt and paste it yourself.
   </span>
-  <span>Prompt template v{{ view.settings.PROMPT_VERSION }}</span>
+  <span>Prompts: follow-up v{{ view.settings.PROMPT_VERSION }} · dashboard v{{ view.settings.DASHBOARD_PROMPT_VERSION }}</span>
 </footer>
+
+</main>
+</div>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

@@ -51,12 +51,53 @@
     setTimeout(function () { row.remove(); }, 250);
   }
 
-  // Clipboard API needs a secure context; localhost qualifies, but fall back
-  // to a hidden textarea so the button still works everywhere.
+  // Buttons carry an icon and a <span> label; change only the label so the
+  // icon survives.
+  function setLabel(button, text) {
+    var label = button.querySelector("span");
+    (label || button).textContent = text;
+  }
+
+  // Three routes to the clipboard, most reliable first:
+  //   1. the desktop window's own bridge (window.pywebview.api), which
+  //      writes through the operating system and needs no browser permission;
+  //   2. the async Clipboard API — needs a secure context, which localhost is;
+  //   3. a hidden textarea and execCommand("copy") for anything older.
   function copyToClipboard(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text);
+    var bridge = window.pywebview && window.pywebview.api &&
+      window.pywebview.api.copy_text;
+    if (bridge) {
+      // If the bridge never answers, do not leave the button hanging: after
+      // a second and a half, fall back to the browser's own clipboard.
+      var answered = false;
+      return new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () {
+          if (!answered) { answered = true; browserCopy(text).then(resolve, reject); }
+        }, 1500);
+        window.pywebview.api.copy_text(text).then(function (ok) {
+          if (answered) { return; }
+          answered = true; clearTimeout(timer);
+          (ok ? Promise.resolve() : browserCopy(text)).then(resolve, reject);
+        }, function () {
+          if (answered) { return; }
+          answered = true; clearTimeout(timer);
+          browserCopy(text).then(resolve, reject);
+        });
+      });
     }
+    return browserCopy(text);
+  }
+
+  function browserCopy(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(function () {
+        return legacyCopy(text);
+      });
+    }
+    return legacyCopy(text);
+  }
+
+  function legacyCopy(text) {
     return new Promise(function (resolve, reject) {
       var area = document.createElement("textarea");
       area.value = text;
@@ -140,9 +181,9 @@
       copyToClipboard(result.prompt).then(function () {
         toast("Prompt v" + result.prompt_version +
           " copied. Paste it into PrivateGPT, then paste the response below.");
-        button.textContent = "Copied ✓";
+        setLabel(button, "Copied ✓");
         setTimeout(function () {
-          button.textContent = "Copy PrivateGPT prompt";
+          setLabel(button, "Copy PrivateGPT prompt");
         }, 2500);
       }).catch(function () {
         // Some browsers block clipboard writes outside a trusted gesture. Show
@@ -201,6 +242,129 @@
     });
   }
 
+  // ------------------------------------------------ PrivateGPT dashboard
+
+  function copyDashboardPrompt(button) {
+    var original = button.querySelector("span") ?
+      button.querySelector("span").textContent : button.textContent;
+    get("/prompt/dashboard").then(function (result) {
+      if (!result.ok) {
+        toast(result.error || "Could not build the dashboard prompt.", true);
+        return;
+      }
+      var preview = document.getElementById("dashboard-prompt-preview");
+      if (preview) { preview.value = result.prompt; }
+      var stat = document.getElementById("dashboard-prompt-stat");
+      if (stat) {
+        stat.textContent = result.words.toLocaleString() + " words, v" +
+          result.prompt_version;
+      }
+      copyToClipboard(result.prompt).then(function () {
+        toast("Dashboard prompt copied. Paste it into PrivateGPT, then save " +
+          "its answer as a .html file and open it.");
+        setLabel(button, "Copied ✓");
+        setTimeout(function () { setLabel(button, original); }, 2500);
+      }).catch(function () {
+        // Show it, selected, on the PrivateGPT view so Ctrl+C still works.
+        showView("assistant");
+        var details = document.querySelector(".preview");
+        if (details) { details.open = true; }
+        if (preview) { preview.focus(); preview.select(); }
+        toast("Could not reach the clipboard. The prompt is shown in the " +
+          "preview, already selected — press Ctrl+C to copy it.", true);
+      });
+    }).catch(function () { toast("Could not reach Jarvis.", true); });
+  }
+
+  // -------------------------------------------- check a generated page
+  // The file is read by the browser from this computer's disk and posted
+  // only to Jarvis's own local server, which checks it in memory.
+
+  function escapeHtml(text) {
+    return String(text == null ? "" : text).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function renderVerdict(target, fileName, result) {
+    var safe = result.verdict === "safe";
+    var html = '<div class="verdict__head verdict__head--' + (safe ? "safe" : "unsafe") + '">' +
+      (safe ? "Safe to open" : "Don't open this page") +
+      '<span class="verdict__file">' + escapeHtml(fileName) + "</span></div>";
+    if (safe) {
+      html += "<p>The policy line is in place and nothing in the page can " +
+        "load from, send to, or move to the network. Double-click the file " +
+        "to open it.</p>";
+    } else {
+      html += "<p>Ask PrivateGPT to build the page again, reminding it of " +
+        "the rules in the prompt. Found:</p>";
+    }
+    function list(items, cls) {
+      if (!items.length) { return ""; }
+      return '<ul class="verdict__list ' + cls + '">' + items.map(function (f) {
+        return "<li><strong>" + escapeHtml(f.why) + "</strong>" +
+          (f.line ? " — line " + f.line : "") +
+          (f.excerpt ? "<code>" + escapeHtml(f.excerpt) + "</code>" : "") + "</li>";
+      }).join("") + "</ul>";
+    }
+    html += list(result.blocking, "verdict__list--blocking");
+    if (result.advisory.length) {
+      html += "<p class=\"muted\">Also noted (blocked by the policy line, so " +
+        "harmless):</p>" + list(result.advisory, "verdict__list--advisory");
+    }
+    target.innerHTML = html;
+    target.hidden = false;
+  }
+
+  var pageInput = document.getElementById("page-check-input");
+  if (pageInput) {
+    pageInput.addEventListener("change", function () {
+      var file = pageInput.files && pageInput.files[0];
+      var target = document.getElementById("page-check-result");
+      if (!file || !target) { return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        post("/check-page", { source: String(reader.result) }).then(function (result) {
+          if (!result.ok) { toast(result.error || "Could not check the page.", true); return; }
+          renderVerdict(target, file.name, result);
+        }).catch(function () { toast("Could not reach Jarvis.", true); });
+        pageInput.value = "";          // choosing the same file again re-checks
+      };
+      reader.onerror = function () { toast("Could not read that file.", true); };
+      reader.readAsText(file);
+    });
+  }
+
+  // ---------------------------------------------------------------- views
+  // Every view is in the page; the rail shows one at a time. The current
+  // view lives in the URL fragment, so a reload — including the automatic
+  // one — comes back to the same place.
+
+  var VIEWS = ["home", "email", "calendar", "assistant", "settings"];
+
+  function showView(name) {
+    if (VIEWS.indexOf(name) === -1) { name = "home"; }
+    document.body.setAttribute("data-view", name);
+    Array.prototype.forEach.call(document.querySelectorAll(".view"), function (el) {
+      var active = el.getAttribute("data-view") === name;
+      el.hidden = !active;
+      el.classList.toggle("is-active", active);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".rail__item"), function (el) {
+      el.classList.toggle("is-active", el.getAttribute("data-view-link") === name);
+    });
+    if (window.location.hash !== "#" + name) {
+      history.replaceState(null, "", "#" + name);
+    }
+    var main = document.querySelector(".main");
+    if (main) { main.scrollTop = 0; }
+  }
+
+  window.addEventListener("hashchange", function () {
+    showView(window.location.hash.replace("#", ""));
+  });
+  showView(window.location.hash.replace("#", "") || "home");
+
   // --------------------------------------------------------- event routing
 
   document.addEventListener("click", function (event) {
@@ -222,26 +386,28 @@
 
     var replyButton = target.closest(".js-open-reply");
     if (replyButton) { openReplyDraft(replyButton); return; }
+
+    var dashboardButton = target.closest(".js-copy-dashboard-prompt");
+    if (dashboardButton) { copyDashboardPrompt(dashboardButton); return; }
+
+    var viewLink = target.closest("[data-view-link]");
+    if (viewLink) {
+      event.preventDefault();
+      showView(viewLink.getAttribute("data-view-link"));
+      return;
+    }
   });
 
   // ------------------------------------------------------- topbar controls
-
-  var settingsButton = document.getElementById("toggle-settings");
-  if (settingsButton) {
-    settingsButton.addEventListener("click", function () {
-      var panel = document.getElementById("settings-panel");
-      panel.hidden = !panel.hidden;
-    });
-  }
 
   var syncButton = document.getElementById("sync-now");
   if (syncButton) {
     syncButton.addEventListener("click", function () {
       syncButton.disabled = true;
-      syncButton.textContent = "Syncing…";
+      setLabel(syncButton, "Syncing…");
       post("/sync", {}).then(function (result) {
         syncButton.disabled = false;
-        syncButton.textContent = "Sync now";
+        setLabel(syncButton, "Sync now");
         if (result.ok) {
           window.location.reload();
         } else {
@@ -249,7 +415,7 @@
         }
       }).catch(function () {
         syncButton.disabled = false;
-        syncButton.textContent = "Sync now";
+        setLabel(syncButton, "Sync now");
         toast("Could not reach Jarvis.", true);
       });
     });

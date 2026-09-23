@@ -7,6 +7,7 @@
   "Copy PrivateGPT prompt". The rendered card inside it always comes from
   response_card.html, never from markup written here.
 #}
+{% from 'icons.html' import icon %}
 <li class="row row--{{ item.priority|default('normal') }}"
     data-category="{{ category }}"
     data-conversation-id="{{ item.conversation_id }}"
@@ -16,29 +17,32 @@
 
   <div class="row__main js-open-item" data-entry-id="{{ item.entry_id }}"
        title="Open in Outlook">
-    <div class="row__line1">
-      <span class="row__subject">{{ item.subject }}</span>
-      {% if item.has_attachments %}
-        <span class="clip" title="{{ item.attachments|join(', ') }}">&#128206;</span>
-      {% endif %}
-      {% if item.priority == 'high' %}<span class="badge badge--high">?</span>{% endif %}
-      {% if item.forwarded %}<span class="chip">forwarded</span>{% endif %}
-      {% if item.unread %}<span class="chip chip--unread">unread</span>{% endif %}
-    </div>
-    <div class="row__line2">
-      <span class="row__who">{{ item.counterparty_display }}</span>
-      <span>{{ item.date_display }}</span>
-      <span class="row__days">{{ item.days_waiting }} day{{ '' if item.days_waiting == 1 else 's' }} waiting</span>
-      {% if item.has_attachments %}
-        <span class="row__attachments">{{ item.attachments|join(', ') }}</span>
-      {% endif %}
+    <span class="avatar avatar--{{ item.tone|default(0) }}">{{ item.initials|default('?') }}</span>
+    <div class="row__text">
+      <div class="row__line1">
+        <span class="row__subject">{{ item.subject }}</span>
+        {% if item.has_attachments %}
+          <span class="clip" title="{{ item.attachments|join(', ') }}">{{ icon('clip', 14) }}</span>
+        {% endif %}
+        {% if item.priority == 'high' %}<span class="pill pill--high" title="Asks you a direct question">question</span>{% endif %}
+        {% if item.forwarded %}<span class="chip">forwarded</span>{% endif %}
+        {% if item.unread %}<span class="chip chip--unread">unread</span>{% endif %}
+      </div>
+      <div class="row__line2">
+        <span class="row__who">{{ item.counterparty_display }}</span>
+        <span>{{ item.date_display }}</span>
+        <span class="row__days">{{ item.days_waiting }} day{{ '' if item.days_waiting == 1 else 's' }} waiting</span>
+        {% if item.has_attachments %}
+          <span class="row__attachments">{{ icon('clip', 12) }} {{ item.attachments|join(', ') }}</span>
+        {% endif %}
+      </div>
     </div>
   </div>
 
   <div class="row__actions">
-    <button type="button" class="btn js-snooze">Snooze {{ config.SNOOZE_DAYS }} days</button>
-    <button type="button" class="btn js-dismiss">No reply needed</button>
-    <button type="button" class="btn btn--primary js-copy-prompt">Copy PrivateGPT prompt</button>
+    <button type="button" class="btn btn--ghost js-snooze">{{ icon('clock', 15) }}<span>Snooze {{ config.SNOOZE_DAYS }} days</span></button>
+    <button type="button" class="btn btn--ghost js-dismiss">{{ icon('check', 15) }}<span>No reply needed</span></button>
+    <button type="button" class="btn btn--primary js-copy-prompt">{{ icon('sparkle', 15) }}<span>Copy PrivateGPT prompt</span></button>
   </div>
 
   {# Collapsible response panel — revealed by "Copy PrivateGPT prompt". #}

@@ -25,6 +25,10 @@ SCRIPTS = [
     ("app.py + api.py + templates", "verify_web.py"),
     ("nothing reaches the network", "verify_no_egress.py"),
     ("the shareable probe report leaks nothing", "verify_probe_redaction.py"),
+    ("the home screen's rules", "verify_overview.py"),
+    ("PrivateGPT dashboard prompt, page checker, browser policy",
+     "verify_dashboard_prompt.py"),
+    ("desktop window, and the browser fallback", "verify_desktop.py"),
 ]
 
 

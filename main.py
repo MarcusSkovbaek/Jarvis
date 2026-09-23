@@ -13,7 +13,6 @@ import argparse
 import logging
 import sys
 import threading
-import webbrowser
 
 import config
 
@@ -24,8 +23,14 @@ def parse_args(argv=None):
                         help="Outlook backend to use (default: config.OUTLOOK_BACKEND)")
     parser.add_argument("--port", type=int, default=config.FLASK_PORT)
     parser.add_argument("--host", default=config.FLASK_HOST)
+    ui = parser.add_mutually_exclusive_group()
+    ui.add_argument("--window", dest="ui", action="store_const", const="window",
+                    help="open Jarvis in its own desktop window (the default)")
+    ui.add_argument("--browser", dest="ui", action="store_const", const="browser",
+                    help="open Jarvis in the default web browser instead")
     parser.add_argument("--no-browser", action="store_true",
-                        help="do not open a browser window on startup")
+                        help="open no window and no browser; just serve "
+                             "http://127.0.0.1:<port>/")
     parser.add_argument("--no-sync", action="store_true",
                         help="serve cached data without starting the sync loop")
     parser.add_argument("--sync-once", action="store_true",
@@ -51,6 +56,12 @@ def parse_args(argv=None):
                              "subjects and bodies with stand-ins. The report "
                              "then contains real mail data - for your eyes "
                              "only, not for sharing.")
+    parser.add_argument("--check-desktop", dest="check_desktop",
+                        action="store_true",
+                        help="open the desktop window on mock data, self-test "
+                             "it, list its network connections and write "
+                             "desktop-check.txt. Your mailbox and your "
+                             "jarvis.db are not touched.")
     parser.add_argument("--report", default=None,
                         help="with --probe: write the report here instead of "
                              "probe-output.txt")
@@ -104,7 +115,14 @@ def main(argv=None):
     # Imported after the backend override so every module sees the same config.
     import app as app_module
     import db
+    import desktop
     import sync
+
+    if args.check_desktop:
+        # Before logging is configured: the check logs to its own temporary
+        # folder, so it cannot write into the real sync.log.
+        import desktop_check
+        return desktop_check.run()
 
     if args.log_level:
         level = getattr(logging, args.log_level)
@@ -187,15 +205,55 @@ def main(argv=None):
 
     url = f"http://{args.host}:{args.port}/"
     log.info("Dashboard at %s", url)
-    if not args.no_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
+    ui = "none" if args.no_browser else (args.ui or config.UI_MODE)
+    if ui == "window":
+        return _run_windowed(flask_app, loop, args, url, log)
+
+    if ui == "browser":
+        desktop.open_browser(url)
     try:
         flask_app.run(host=args.host, port=args.port, debug=args.debug,
                       use_reloader=False, threaded=True)
     except KeyboardInterrupt:  # pragma: no cover
         pass
     finally:
+        loop.stop()
+        log.info("Jarvis stopped")
+    return 0
+
+
+def _run_windowed(flask_app, loop, args, url, log):
+    """Serve on a background thread and show the dashboard in a window.
+
+    pywebview has to own the main thread, so the server moves off it. The
+    socket is bound before the window opens, so the first page load cannot
+    race the server. Closing the window stops everything. If no window can
+    be created, the dashboard opens in the browser instead and Jarvis keeps
+    serving until its console is closed — the same as --browser.
+    """
+    import desktop
+    from werkzeug.serving import make_server
+
+    server = make_server(args.host, args.port, flask_app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, name="jarvis-http",
+                              daemon=True)
+    thread.start()
+    try:
+        if desktop.open_window(url):
+            log.info("Window closed - Jarvis stopped")
+            return 0
+        log.warning("Opening the dashboard in the browser instead. Reason: %s",
+                    desktop.last_fallback_reason)
+        desktop.open_browser(url)
+        # join() with a timeout, in a loop, so Ctrl+C still reaches us on
+        # Windows, where a bare join() would swallow it.
+        while thread.is_alive():
+            thread.join(0.5)
+    except KeyboardInterrupt:  # pragma: no cover
+        pass
+    finally:
+        server.shutdown()
         loop.stop()
         log.info("Jarvis stopped")
     return 0

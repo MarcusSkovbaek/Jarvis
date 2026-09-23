@@ -15,6 +15,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 
 import config
 import dashboard
+import page_check
 import db
 import prompt_builder
 import response_renderer
@@ -185,6 +186,50 @@ def prompt():
                     "prompt_version": prompt_builder.prompt_version(prompt_type),
                     "entry_id": item.get("entry_id"),
                     "category": category})
+
+
+@bp.get("/prompt/dashboard")
+def dashboard_prompt():
+    """The whole-dashboard prompt, for PrivateGPT to turn into an HTML page."""
+    view = dashboard.build_view()
+    text = prompt_builder.build_dashboard_prompt(view)
+    counts = view["counts"]
+    # Logged by size and counts only: like the follow-up prompt, this is the
+    # moment data is handed to the clipboard, so there is a record of it.
+    log.info("Built dashboard prompt v%s (%s chars: %s awaiting your reply, "
+             "%s no response, %s meetings)", config.DASHBOARD_PROMPT_VERSION,
+             len(text), counts[config.CATEGORY_OVERDUE_INBOUND],
+             counts[config.CATEGORY_AWAITING_REPLY],
+             counts[config.CATEGORY_MEETING])
+    return jsonify({"ok": True, "prompt": text,
+                    "prompt_version": config.DASHBOARD_PROMPT_VERSION,
+                    "csp_line": prompt_builder.CSP_LINE,
+                    "chars": len(text), "words": len(text.split())})
+
+
+# A generated page is a few tens of KB; anything past this is not one.
+MAX_PAGE_CHECK_CHARS = 5_000_000
+
+
+@bp.post("/check-page")
+def check_page():
+    """Check a PrivateGPT-generated page before the user opens it.
+
+    The page's source arrives from the dashboard's file picker, read by the
+    browser from the user's own disk and posted to this local server; it is
+    checked in memory and not stored. Only the verdict is logged.
+    """
+    payload = request.get_json(silent=True) or {}
+    source = payload.get("source")
+    if not isinstance(source, str) or not source.strip():
+        return _bad_request("No page content received")
+    if len(source) > MAX_PAGE_CHECK_CHARS:
+        return _bad_request("That file is too large to be a generated page")
+    result = page_check.check_page(source)
+    log.info("Checked a generated page (%s chars): %s, %s blocking, "
+             "%s advisory", result["size"], result["verdict"],
+             len(result["blocking"]), len(result["advisory"]))
+    return jsonify({"ok": True, **result})
 
 
 @bp.post("/responses")

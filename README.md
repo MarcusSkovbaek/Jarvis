@@ -26,8 +26,11 @@ jarvis-env\Scripts\activate
 ```
 
 ```powershell
-pip install flask pywin32
+pip install -r requirements.txt
 ```
+
+(That is `flask`, `pywin32` and `pywebview`, plus `pyinstaller` for building
+the .exe. No admin rights needed.)
 
 Against mock data (no mailbox needed — this is how it runs on any machine):
 
@@ -41,18 +44,29 @@ Against the real Outlook mailbox (Windows, Outlook running):
 python main.py --backend com
 ```
 
-The dashboard is at http://localhost:5000, bound to loopback only.
+Jarvis opens in **its own desktop window** — no browser tabs, no address bar,
+its own taskbar entry. On Windows the window is drawn by Edge WebView2, which
+ships with Windows 10 and 11. Closing the window stops Jarvis. If a window
+cannot be opened (pywebview missing, WebView2 missing), Jarvis says why in
+`sync.log` and opens the dashboard in your browser instead.
+
+Either way the dashboard is served at http://127.0.0.1:5000, bound to loopback
+only; Jarvis refuses to start on any other address.
 
 | Flag | Effect |
 |------|--------|
 | `--backend mock\|com` | which Outlook backend to use |
+| `--window` | open in a desktop window (the default, `UI_MODE` in config) |
+| `--browser` | open in the default browser instead |
+| `--no-browser` | open nothing; just serve the dashboard |
 | `--port N` | serve on a different port |
-| `--no-browser` | do not open a browser window |
 | `--no-sync` | serve cached data without starting the sync loop |
 | `--sync-once` | run one sync, print the result, exit |
 | `--log-level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `--debug` | verbose logging |
 | `--version` | print version, paths and backend, then exit |
+| `--probe` | read-only probe of the real mailbox; writes `probe-output.txt`, redacted by default (`--no-redact`, `--full`, `--report PATH`) |
+| `--check-desktop` | open the window on mock data, self-test it, list its network connections, write `desktop-check.txt` |
 
 `JARVIS_OUTLOOK_BACKEND` works as an environment variable equivalent of
 `--backend`.
@@ -60,6 +74,21 @@ The dashboard is at http://localhost:5000, bound to loopback only.
 ---
 
 ## What it shows
+
+![Home](docs/screenshots/home.png)
+
+<sub>Mock data. Screenshots taken on the Linux build machine, where Liberation
+Sans stands in for Windows' Segoe UI; on Windows the text is Segoe UI. More:
+[Email view](docs/screenshots/email.png) ·
+[PrivateGPT page check](docs/screenshots/privategpt-check.png).</sub>
+
+**Home** is the overview: a greeting and one sentence on what needs attention,
+then five cards — the emails waiting on you (direct questions first), the next
+day's meetings on an hour timeline, the PrivateGPT brief, the threads waiting
+on others coloured by age, and **Today's focus**: the three things most worth
+doing first, each with its reason, plus a ring showing how many upcoming
+meetings you have answered. Every row opens its item in Outlook. The rail on
+the left switches to the full views:
 
 **1. Awaiting your reply** — mail sent directly to you (To, not CC), unanswered
 for more than `INBOUND_OVERDUE_DAYS` (2). Anything containing a question mark is
@@ -77,25 +106,55 @@ Every row: click to open in Outlook, **Snooze 3 days**, **No reply needed**,
 **Copy PrivateGPT prompt**. Paperclip where there are attachments, with the
 filenames shown and included in the prompt.
 
+### When you want AI: the PrivateGPT dashboard
+
+Everything above works without AI. When you want more — a summary of every
+thread, themes across them, suggested actions and draft replies — **Copy
+dashboard prompt** puts one prompt on the clipboard covering everything on
+screen. Pasted into PrivateGPT, it asks for a single self-contained HTML page
+you save and open: a briefing, today's focus with a progress ring, one card per
+theme, drafts with a copy button, filters, search, and ticks that persist for
+the day.
+
+Two things keep that page from sending anything anywhere:
+
+- **The prompt requires a Content-Security-Policy line** at the top of the page
+  (`prompt_builder.CSP_LINE`). With it, the browser refuses everything the page
+  tries to load or send. `tests/verify_dashboard_prompt.py` proves this in a
+  real browser: a page attempting 14 kinds of request gets none through with
+  the line, and all 14 without it.
+- **Jarvis checks the saved page before you open it** (PrivateGPT view, step 4;
+  `page_check.py`). A policy line cannot stop a page navigating itself to
+  another address, which could carry data with it — the same test shows that
+  happening — so the checker refuses any page where the line is missing or
+  misplaced, anything points outside the page, or a script navigates, opens a
+  window or clicks a link by itself. The file is read on your computer and
+  checked in memory; it is not stored.
+
 ---
 
 ## Layout
 
 ```
 main.py                 entrypoint: starts the sync loop, then Flask
+desktop.py              the desktop window (pywebview), with browser fallback
+desktop_check.py        --check-desktop: self-test the window on the work PC
 config.py               every configurable value; nothing is hardcoded elsewhere
 outlook_reader.py       the only module that talks to Outlook
 mock_outlook.py         mock win32com layer, for running without a mailbox
 email_processor.py      Features 1 and 2 detection logic (pure, no I/O)
 calendar_reader.py      Feature 3 logic (pure, no I/O)
-prompt_builder.py       versioned PrivateGPT prompt templates
+prompt_builder.py       versioned PrivateGPT prompt templates (follow-up, dashboard)
+page_check.py           checks a PrivateGPT-generated page before it is opened
+probe.py                --probe: read-only look at the real mailbox
+redaction.py            stand-ins that make the probe report safe to share
 response_renderer.py    response parsing + the fixed card (owns response_card.html)
-dashboard.py            builds the view model from the cache
+dashboard.py            builds the view model, including the home overview
 db.py                   every SQLite read and write
 api.py                  the /api/v1 blueprint
 app.py                  Flask application factory
 sync.py                 background sync loop and logging
-templates/              dashboard.html, row.html, response_card.html
+templates/              dashboard.html, row.html, response_card.html, icons.html
 static/                 style.css, app.js — local only, no external references
 tests/                  the Phase 1 verification suite and the Phase 2 probe
 jarvis.spec             PyInstaller build definition
@@ -142,12 +201,12 @@ which is the quickest way to tell which instance is answering on a port.
 python tests\run_all.py
 ```
 
-Eight suites against mock data, including `verify_prompt_conformance.py`, which
+Eleven suites against mock data, including `verify_prompt_conformance.py`, which
 asserts the generated PrivateGPT prompt matches the build brief **byte for
 byte** — every word, blank line and dash.
 
-Two of the eight exist to check the promises that a reader cannot verify by
-reading the code:
+Several exist to check promises that a reader cannot verify by reading the
+code:
 
 - `verify_no_egress.py` installs a CPython audit hook — which fires for every
   socket connection, DNS lookup and URL opened anywhere in the process,
@@ -161,6 +220,15 @@ reading the code:
   asserts none of them survive — whole or in fragments — while the things that
   make the report useful (reply prefixes, file extensions, counts, id shapes)
   do.
+
+- `verify_dashboard_prompt.py` opens saved pages from disk in a real
+  Chromium, with a local server standing in for the internet, and shows the
+  policy line stopping every request a page can make — and the checker
+  refusing the one thing the policy line cannot stop.
+- `verify_desktop.py` starts Jarvis the way you do, opens the real window,
+  tries to navigate it away (it comes back), closes it and confirms Jarvis
+  stopped and freed its port; then removes pywebview and confirms the browser
+  fallback. `verify_overview.py` pins down every rule on the home screen.
 
 Separately, a black-box acceptance test that launches the compiled .exe in a
 clean directory and drives it over HTTP exactly as the browser does:
@@ -262,9 +330,10 @@ Both are exercised explicitly in `tests\verify_processors.py`.
 ## Status
 
 Phase 1 (build and self-verify against mock data) is complete: every module
-verified by actual execution, all six suites passing, and the compiled .exe
-passing 111 black-box checks — including that the prompt it serves matches the
-brief byte for byte.
+verified by actual execution and all eleven suites passing. The desktop window
+has been verified in a real window on the build machine (Qt WebEngine, the
+same Chromium engine family as WebView2); on Windows itself it is verified by
+`Jarvis.exe --check-desktop`.
 
 Phase 2 (real mailbox on the work PC) is not started — see
 [PHASE2_CHECKLIST.md](PHASE2_CHECKLIST.md).

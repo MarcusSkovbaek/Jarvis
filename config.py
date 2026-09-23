@@ -303,6 +303,38 @@ PROMPT_VERSION = 1
 # Message bodies are truncated to this many words inside the prompt.
 PROMPT_BODY_TRUNCATE_WORDS = 500
 
+# The "dashboard" prompt: one prompt covering everything on screen, asking
+# PrivateGPT to analyse it and return a self-contained HTML page to work in.
+# Versioned separately from the follow-up prompt, because the two change
+# independently. Increment on any change to that template.
+DASHBOARD_PROMPT_VERSION = 1
+
+# Per message, per item. The dashboard prompt carries every flagged item, so
+# snippets are kept short to leave PrivateGPT room to answer.
+DASHBOARD_PROMPT_SNIPPET_WORDS = 60
+
+# Per section. Beyond this the oldest items are left out and the prompt says
+# how many were omitted, rather than silently dropping them.
+DASHBOARD_PROMPT_MAX_ITEMS = 25
+
+# ---------------------------------------------------------------------------
+# Desktop window
+# ---------------------------------------------------------------------------
+
+# "window" opens Jarvis in its own desktop window (pywebview, rendered by
+# Edge WebView2 on Windows). "browser" serves it to the default browser, as
+# earlier versions did. If the window cannot be created, Jarvis falls back to
+# the browser automatically and says why in sync.log.
+UI_MODE = "window"
+
+# In window mode, hide the console window once the app window is showing.
+# The console returns if the window cannot open (browser fallback).
+HIDE_CONSOLE_IN_WINDOW_MODE = True
+
+WINDOW_TITLE = "Jarvis"
+WINDOW_SIZE = (1440, 920)
+WINDOW_MIN_SIZE = (1100, 720)
+
 # ---------------------------------------------------------------------------
 # Web server
 # ---------------------------------------------------------------------------
@@ -353,6 +385,8 @@ def public_settings():
         "RETENTION_DAYS": RETENTION_DAYS,
         "SYNC_INTERVAL_MINUTES": SYNC_INTERVAL_MINUTES,
         "PROMPT_VERSION": PROMPT_VERSION,
+        "DASHBOARD_PROMPT_VERSION": DASHBOARD_PROMPT_VERSION,
+        "UI_MODE": UI_MODE,
         "EXCLUDED_DOMAINS": EXCLUDED_DOMAINS,
         "INCLUDE_INBOX_SUBFOLDERS": INCLUDE_INBOX_SUBFOLDERS,
         "DB_PATH": DB_PATH,

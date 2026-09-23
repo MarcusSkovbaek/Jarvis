@@ -18,8 +18,24 @@ from flask import Flask, render_template
 import api
 import config
 import dashboard
+import prompt_builder
 
 log = logging.getLogger("jarvis.app")
+
+
+# 'unsafe-eval' is required by the desktop window: pywebview delivers its
+# bridge (window.pywebview.api) and the results of every bridge call into the
+# page through eval(). Without it the copy buttons in the window would never
+# get an answer. It does not weaken what this policy is for: loads and
+# connections are still limited to Jarvis itself, and inline scripts are
+# still refused, so nothing injected into the page can run.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+    "object-src 'none'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'none'"
+)
 
 
 def _resource_root():
@@ -49,7 +65,20 @@ def create_app(sync_loop=None, outlook_reader_factory=None):
             view=view,
             config=config,
             refresh_seconds=config.DASHBOARD_REFRESH_SECONDS,
+            csp_line=prompt_builder.CSP_LINE,
         )
+
+    @app.after_request
+    def security_headers(response):
+        # Jarvis's own pages load nothing from outside, and this makes the
+        # browser (or the desktop window) enforce that: were a template ever
+        # to reference an external font or script, it would simply not load.
+        # Inline style attributes are allowed because the calendar timeline
+        # positions its events with them; inline scripts are not.
+        response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.get("/healthz")
     def healthz():

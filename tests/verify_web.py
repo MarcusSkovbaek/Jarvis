@@ -75,7 +75,12 @@ def main():
           and "Can you confirm the crane access dates?" in html)
     check("age bands rendered",
           all(label in html for label, _, _ in config.AGE_BANDS))
-    check("attachment paperclip rendered", "&#128206;" in html or "\U0001F4CE" in html)
+    # The indicator is an inline SVG icon (the emoji rendered in colour and
+    # clashed with the dark theme). What matters is that the paperclip is
+    # there and carries the filenames as its tooltip.
+    check("attachment paperclip rendered",
+          re.search(r'<span class="clip" title="[^"]*budget_q3_v2\.xlsx[^"]*">\s*<svg',
+                    html) is not None)
     check("attachment names rendered", "budget_q3_v2.xlsx" in html)
     check("meeting rows rendered", "Pre-qualification meeting - Skagen" in html)
     check("pending acceptance indicator rendered",

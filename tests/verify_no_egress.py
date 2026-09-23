@@ -165,6 +165,13 @@ def drive_everything(workdir):
         responses[f"{prefix}/prompt (GET)"] = client.get(
             f"{prefix}/prompt", query_string=payload).status_code
         responses[f"{prefix}/sync (POST)"] = client.post(f"{prefix}/sync").status_code
+    # The PrivateGPT dashboard route: building the prompt and checking a page.
+    responses[f"{prefix}/prompt/dashboard (GET)"] = client.get(
+        f"{prefix}/prompt/dashboard").status_code
+    responses[f"{prefix}/check-page (POST)"] = client.post(
+        f"{prefix}/check-page",
+        json={"source": "<html><body><img src='https://example.com/x.png'>"
+                        "</body></html>"}).status_code
 
     # The probe, which is the other thing that reads the mailbox.
     import probe
@@ -247,6 +254,19 @@ def main():
           f"{len(detected)} event(s) recorded")
     check("and it is correctly judged non-local",
           any(not is_local(e[2]) for e in detected))
+
+    rule("Jarvis's pages tell the browser to load nothing from outside")
+    import app as app_module
+    headers = app_module.create_app().test_client().get("/").headers
+    policy = headers.get("Content-Security-Policy", "")
+    check("the dashboard is served with a Content-Security-Policy",
+          "default-src 'self'" in policy, policy[:60])
+    script_src = policy.split("script-src")[1].split(";")[0]
+    check("…which forbids inline and external scripts",
+          "'self'" in script_src and "unsafe-inline" not in script_src
+          and "http" not in script_src, script_src.strip())
+    check("…and limits requests to Jarvis itself",
+          "connect-src 'self'" in policy and "frame-ancestors 'none'" in policy)
 
     rule("No external references in what the browser is served")
     served = []
