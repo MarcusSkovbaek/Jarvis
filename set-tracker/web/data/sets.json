@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "generatedAt": null,
+ "scanOk": true,
+ "settings": {
+  "minDurationMinutes": 30,
+  "minQualityScore": 60,
+  "qualityBase": 62,
+  "scanIntervalHours": 2
+ },
+ "artists": [
+  {
+   "id": "yousuke-yukimatsu",
+   "name": "Yousuke Yukimatsu",
+   "displayName": "¥ØU$UK€ ¥UK1MAT$U",
+   "subtitle": "Yousuke Yukimatsu · 行松陽介 · Osaka",
+   "trackingSince": "2026-10-04T17:50:00Z",
+   "links": {
+    "soundcloud": "https://soundcloud.com/yousukeyukimatsu",
+    "youtube": "https://www.youtube.com/results?search_query=Yousuke+Yukimatsu&sp=CAI%253D",
+    "residentAdvisor": "https://ra.co/dj/yosukeyukimatsu-jp"
+   }
+  }
+ ],
+ "health": [],
+ "items": []
+}

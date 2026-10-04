@@ -1,0 +1,125 @@
+# Sætradar: scans YouTube and SoundCloud every two hours, keeps the results on
+# the set-tracker-data branch, and publishes set-tracker/web to GitHub Pages.
+# One-time setup: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+name: Sætradar
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - "set-tracker/**"
+      - ".github/workflows/set-tracker.yml"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: write
+
+concurrency:
+  group: set-tracker
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    # Schedules only ever run on the default branch; pushes elsewhere are ignored.
+    if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      built: ${{ steps.build.outputs.built }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: set-tracker/requirements.txt
+
+      - name: Install yt-dlp, numpy and ffmpeg
+        run: |
+          pip install --upgrade -r set-tracker/requirements.txt
+          command -v ffmpeg || (sudo apt-get update -q && sudo apt-get install -y -q ffmpeg)
+
+      - name: Self-test
+        working-directory: set-tracker
+        run: python -m unittest discover -s tests
+
+      - name: Fetch saved data
+        id: saved
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: set-tracker-data
+          path: tracker-data
+
+      - name: Scan
+        id: scan
+        continue-on-error: true
+        working-directory: set-tracker
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YTDLP_COOKIES: ${{ secrets.YTDLP_COOKIES }}
+        run: |
+          mkdir -p ../tracker-data
+          if [ -n "$YTDLP_COOKIES" ]; then
+            printf '%s\n' "$YTDLP_COOKIES" > "$RUNNER_TEMP/cookies.txt"
+            export YTDLP_COOKIES_FILE="$RUNNER_TEMP/cookies.txt"
+          fi
+          python -m tracker --data-dir ../tracker-data
+
+      - name: Save data to the set-tracker-data branch
+        if: hashFiles('tracker-data/sets.json') != ''
+        working-directory: tracker-data
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          rm -rf .git
+          git init -q -b set-tracker-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '# Sætradar data\n\nWritten by the Sætradar workflow every two hours. Do not edit by hand.\n' > README.md
+          git add -A
+          git commit -q -m "Sætradar data $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git" set-tracker-data
+
+      - name: Build the site
+        id: build
+        run: |
+          rm -rf _site
+          cp -r set-tracker/web _site
+          if [ -f tracker-data/sets.json ]; then cp tracker-data/sets.json tracker-data/sets.js _site/data/; fi
+          rm -f _site/data/seen.json
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Keep the schedule alive
+        # GitHub pauses schedules in repositories without activity for 60 days.
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/set-tracker.yml/enable"
+
+      - name: Report a failed scan
+        if: steps.scan.outcome == 'failure'
+        run: |
+          echo "::error::Every source failed in this scan. The page shows the errors under Kilder."
+          exit 1
+
+  deploy:
+    needs: scan
+    if: always() && needs.scan.outputs.built == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

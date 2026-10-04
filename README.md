@@ -327,6 +327,15 @@ Both are exercised explicitly in `tests\verify_processors.py`.
 
 ---
 
+## Also in this repository: Sætradar
+
+[`set-tracker/`](set-tracker/README.md) is a separate, small web app that
+watches YouTube and SoundCloud for new DJ sets. It runs on GitHub Actions and
+GitHub Pages, not on the work PC, and unlike Jarvis it does use the network.
+Jarvis never imports it, and it does not touch Jarvis' tests or build.
+
+---
+
 ## Status
 
 Phase 1 (build and self-verify against mock data) is complete: every module
