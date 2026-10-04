@@ -100,11 +100,15 @@ class FakeFetcher:
         return m
 
 
-BASELINED = {"baselined": ["yy:youtube", "yy:soundcloud"]}
+def keys(config=CONFIG, platform=None):
+    """Baseline keys of every search and profile in a config (optionally one platform)."""
+    return [pipeline.job_key(a, pf, kind, v) for a in config["artists"]
+            for pf, kind, v in pipeline.job_specs(a) if platform in (None, pf)]
 
 
 def scan(fetcher, state=None, data=None, now=NOW, config=CONFIG):
-    s = pipeline.Scanner(copy.deepcopy(config), state if state is not None else copy.deepcopy(BASELINED),
+    # Default: a scanner that has looked before, so new uploads count as new.
+    s = pipeline.Scanner(copy.deepcopy(config), state if state is not None else {"baselined": keys(config)},
                          data or {}, fetcher, now=now, log=lambda *a: None)
     return s, s.run()
 
@@ -469,7 +473,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(out["items"], [])
         self.assertEqual(s.seen["yt:z"]["reason"], "baseline")
         self.assertNotIn(("enrich", "yt:z"), f.calls)
-        self.assertIn("yy:youtube", s.state["baselined"])
+        self.assertEqual(sorted(s.state["baselined"]), sorted(keys()))
 
     def test_after_baseline_undated_new_item_uses_first_seen(self):
         f = FakeFetcher(yt_results=[yt("n", "Yukimatsu set", 70, published=None)],
@@ -543,25 +547,52 @@ class Pipeline(unittest.TestCase):
         # What happened on the first real run: YouTube failed, SoundCloud worked.
         old_video = yt("v", "¥ØU$UK€ ¥UK1MAT$U - Coachella 2026 (Full Set)", 70, published=None)
         s, out = scan(FakeFetcher(yt_results=[old_video], fail={"youtube"}), state={})
-        self.assertEqual(s.state["baselined"], ["yy:soundcloud"])
+        self.assertEqual(sorted(s.state["baselined"]), sorted(keys(platform="soundcloud")))
         # Next run YouTube answers: its existing videos are baseline, not news.
         f2 = FakeFetcher(yt_results=[old_video], enrich={"yt:v": SourceError("bot check")})
         s2, out2 = scan(f2, state=s.state, data=out, now=NOW + timedelta(hours=2))
         self.assertEqual(out2["items"], [])
         self.assertEqual(s2.seen["yt:v"]["reason"], "baseline")
-        self.assertIn("yy:youtube", s2.state["baselined"])
+        self.assertTrue(set(keys(platform="youtube")) <= set(s2.state["baselined"]))
 
-    def test_legacy_artist_level_baseline_is_redone(self):
+    def test_legacy_baseline_keys_are_redone(self):
         old_video = yt("v", "Yukimatsu live set", 70, published=None)
-        s, out = scan(FakeFetcher(yt_results=[old_video]), state={"baselined": ["yy"]})
-        self.assertEqual(out["items"], [])
-        self.assertEqual(s.seen["yt:v"]["reason"], "baseline")
+        for legacy in (["yy"], ["yy:youtube", "yy:soundcloud"]):
+            s, out = scan(FakeFetcher(yt_results=[old_video]), state={"baselined": legacy})
+            self.assertEqual(out["items"], [], legacy)
+            self.assertEqual(s.seen["yt:v"]["reason"], "baseline", legacy)
+
+    def test_a_spelling_added_later_starts_with_its_own_baseline(self):
+        class PerQuery(FakeFetcher):
+            def youtube_search(self, q, limit, since):
+                self.calls.append(("yts", q))
+                return copy.deepcopy(self.by_query.get(q, []))
+        plain = dict(ARTIST, searchNames=["Yousuke Yukimatsu"], sources={"youtube": {}, "soundcloud": {}})
+        cfg1 = dict(copy.deepcopy(CONFIG), artists=[plain])
+        f1 = PerQuery()
+        f1.by_query = {"Yousuke Yukimatsu": [yt("a", "Yousuke Yukimatsu set", 70, published=None)]}
+        s, out = scan(f1, state={}, config=cfg1)
+        # The stylised spelling is added to the config. Its first results are
+        # old uploads the plain search never listed; a new upload found by the
+        # established search is still news.
+        styled = dict(plain, searchNames=["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U"])
+        cfg2 = dict(copy.deepcopy(CONFIG), artists=[styled])
+        f2 = PerQuery(enrich={"yt:old": SourceError("bot"), "yt:new": SourceError("bot")})
+        f2.by_query = {"¥ØU$UK€ ¥UK1MAT$U": [yt("old", "¥ØU$UK€ ¥UK1MAT$U | Boiler Room", 70, published=None,
+                                               uploader="Boiler Room")],
+                       "Yousuke Yukimatsu": [yt("new", "Yousuke Yukimatsu | Boiler Room", 80, published=None,
+                                                uploader="Boiler Room")]}
+        s2, out2 = scan(f2, state=s.state, data=out, now=NOW + timedelta(hours=2), config=cfg2)
+        self.assertEqual(s2.seen["yt:old"]["reason"], "baseline")
+        self.assertEqual(by_id(out2)["yt:new"]["status"], "accepted")
+        self.assertIn(pipeline.job_key(styled, "youtube", "search", "¥ØU$UK€ ¥UK1MAT$U"), s2.state["baselined"])
 
     def test_approximate_dates_from_listings(self):
         def approx(vid, title, hours_ago):
             return yt(vid, title, 70, published=pipeline.iso(NOW - timedelta(hours=hours_ago)), precision="approx")
         # First look at YouTube: an approximate date is not proof of being new.
-        s, out = scan(FakeFetcher(yt_results=[approx("a", "Yukimatsu set", 5)]), state={"baselined": ["yy:soundcloud"]})
+        s, out = scan(FakeFetcher(yt_results=[approx("a", "Yukimatsu set", 5)]),
+                      state={"baselined": keys(platform="soundcloud")})
         self.assertEqual(s.seen["yt:a"]["reason"], "baseline")
         # After the baseline: three weeks ago is old, two hours ago is new.
         f = FakeFetcher(yt_results=[approx("o", "Yukimatsu old set", 24 * 21), approx("n", "Yukimatsu new set", 2)],
@@ -615,14 +646,75 @@ class Pipeline(unittest.TestCase):
         cfg = json.loads((ROOT / "config" / "artists.json").read_text("utf-8"))
         self.assertEqual(pipeline.validate_config(cfg), [])
 
+    def test_every_spelling_is_searched_on_every_platform(self):
+        artist = dict(ARTIST, searchNames=["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "ＹＯＵＳＵＫＥ ＹＵＫＩＭＡＴＳＵ"],
+                      sources={"youtube": {"searchQueries": ["Yousuke Yukimatsu DJ set", "yousuke yukimatsu"]},
+                               "soundcloud": {"searchQueries": ["yukimatsu"]}})
+        # Full-width and lower-case repeats are searched once.
+        self.assertEqual(pipeline.search_queries(artist, "youtube"),
+                         ["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "Yousuke Yukimatsu DJ set"])
+        self.assertEqual(pipeline.search_queries(artist, "soundcloud"),
+                         ["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "yukimatsu"])
+        cfg = dict(copy.deepcopy(CONFIG), artists=[artist])
+        f = FakeFetcher()
+        scan(f, config=cfg)
+        for kind in ("yts", "scs"):
+            searched = [q for k, q in f.calls if k == kind]
+            self.assertIn("Yousuke Yukimatsu", searched, kind)
+            self.assertIn("¥ØU$UK€ ¥UK1MAT$U", searched, kind)
+
+    def test_shipped_config_searches_plain_and_stylised_names_everywhere(self):
+        artist = json.loads((ROOT / "config" / "artists.json").read_text("utf-8"))["artists"][0]
+        for platform in ("youtube", "soundcloud"):
+            queries = pipeline.search_queries(artist, platform)
+            for name in ("Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "YØU$UK€ YUK1MAT$U", "行松陽介"):
+                self.assertIn(name, queries, platform)
+
+    def test_special_characters_reach_the_searches_unchanged(self):
+        from urllib.parse import parse_qs, urlparse
+        for name in ("¥ØU$UK€ ¥UK1MAT$U", "YØU$UK€ YUK1MAT$U", "行松陽介"):
+            q = parse_qs(urlparse(sources.youtube_search_url(name)).query)
+            self.assertEqual(q["search_query"], [name])
+
+    def test_spelling_variants_in_titles_are_recognised(self):
+        artist = json.loads((ROOT / "config" / "artists.json").read_text("utf-8"))["artists"][0]
+        scanner = pipeline.Scanner({"artists": [artist]}, {}, {}, FakeFetcher(), now=NOW, log=lambda *a: None)
+        aliases = scanner._aliases(artist)
+        for title in ["YØU$UK€ YUK1MAT$U live set in Sofia", "Yousuke Yuk1matsu @ Boiler Room",
+                      "Yosuke Yukimatsu DJ set", "¥ØU$UK€ ¥UK1MAT$U | HÖR", "行松陽介 DJ"]:
+            self.assertTrue(matching.names_artist(title, aliases), title)
+
+    def test_output_lists_the_spellings_for_the_page(self):
+        _, out = scan(FakeFetcher(), config=dict(copy.deepcopy(CONFIG),
+                                               artists=[dict(ARTIST, searchNames=["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U"])]))
+        self.assertEqual(out["artists"][0]["searchNames"], ["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U"])
+
+    def test_youtube_api_failure_falls_back_to_the_search_page(self):
+        calls = []
+        original = (sources.youtube_search_api, sources.youtube_search_ytdlp)
+
+        def api(*a):
+            calls.append("api")
+            raise SourceError("YouTube API: quotaExceeded")
+
+        def page(q, limit):
+            calls.append("page")
+            return [yt("a", "Yukimatsu set", 70)]
+        sources.youtube_search_api, sources.youtube_search_ytdlp = api, page
+        try:
+            found = pipeline.Fetcher(youtube_api_key="k", log=lambda *a: None).youtube_search("q", 10, "x")
+        finally:
+            sources.youtube_search_api, sources.youtube_search_ytdlp = original
+        self.assertEqual(calls, ["api", "page"])
+        self.assertEqual(found[0]["id"], "yt:a")
+
     def test_second_artist_is_independent(self):
         other = copy.deepcopy(ARTIST)
         other.update(id="other", name="DJ Other", displayName="DJ Other", aliases=["dj other"])
         cfg = copy.deepcopy(CONFIG)
         cfg["artists"].append(other)
         f = FakeFetcher(yt_results=[yt("a", "Yukimatsu DJ set", 62), yt("b", "DJ Other – live", 90)])
-        _, out = scan(f, state={"baselined": ["yy:youtube", "yy:soundcloud", "other:youtube", "other:soundcloud"]},
-                      config=cfg)
+        _, out = scan(f, state={"baselined": keys(cfg)}, config=cfg)
         items = by_id(out)
         self.assertEqual(items["yt:a"]["artistId"], "yy")
         self.assertEqual(items["yt:b"]["artistId"], "other")

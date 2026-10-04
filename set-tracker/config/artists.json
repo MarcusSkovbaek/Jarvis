@@ -24,6 +24,13 @@
       "displayName": "¥ØU$UK€ ¥UK1MAT$U",
       "subtitle": "Yousuke Yukimatsu · 行松陽介",
       "trackingSince": "2026-10-04T19:50:00+02:00",
+      "searchNames": [
+        "Yousuke Yukimatsu",
+        "¥ØU$UK€ ¥UK1MAT$U",
+        "YØU$UK€ YUK1MAT$U",
+        "Yosuke Yukimatsu",
+        "行松陽介"
+      ],
       "aliases": ["yukimatsu", "行松陽介", "行松 陽介", "ユキマツ"],
       "links": {
         "soundcloud": "https://soundcloud.com/yousukeyukimatsu",
@@ -32,11 +39,11 @@
       },
       "sources": {
         "youtube": {
-          "searchQueries": ["Yousuke Yukimatsu", "Yousuke Yukimatsu DJ set", "行松陽介"],
+          "searchQueries": ["Yousuke Yukimatsu DJ set"],
           "channels": []
         },
         "soundcloud": {
-          "searchQueries": ["Yousuke Yukimatsu", "yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "行松陽介"],
+          "searchQueries": ["yukimatsu"],
           "users": ["yousukeyukimatsu"]
         }
       }

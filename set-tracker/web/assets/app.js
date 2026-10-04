@@ -423,6 +423,14 @@
       if (links.childNodes.length) append(plate, links);
     }
 
+    if (!many && shown[0] && (shown[0].searchNames || []).length) {
+      var names = el("ul", { class: "spellings__list" });
+      shown[0].searchNames.forEach(function (n) {
+        append(names, el("li", { lang: hasCJK(n) ? "ja" : null, text: n }));
+      });
+      append(plate, el("div", { class: "spellings" }, el("span", { class: "label", text: "Søger efter" }), names));
+    }
+
     var s = S.data.settings || {};
     var starts = shown.map(function (x) { return x.trackingSince; });
     var sameStart = starts.every(function (x) { return x === starts[0]; });

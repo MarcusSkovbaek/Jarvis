@@ -258,6 +258,9 @@ for (const [devName, device] of [["iphone", IPHONE], ["edge", EDGE]]) {
       const lines = new Set([...r.getClientRects()].map((x) => Math.round(x.top)));
       return lines.size <= n.textContent.trim().split(/\s+/).length;
     })));
+    const spellings = await page.$$eval(".spellings__list li", (ns) => ns.map((n) => n.textContent));
+    check(`${tag}: shows that both the plain and the stylised name are searched`,
+      spellings.includes("Yousuke Yukimatsu") && spellings.includes("¥ØU$UK€ ¥UK1MAT$U"), spellings.join(" | "));
     check(`${tag}: status says first scan is pending or done`, /Ikke tjekket|Tjekket|Sidste/.test(await page.locator("#scan-text").innerText()));
     await commonChecks(tag, page, errors);
     await shot(page, `empty-${devName}-${scheme}`);

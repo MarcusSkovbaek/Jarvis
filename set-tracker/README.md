@@ -3,7 +3,8 @@
 Holder øje med YouTube og SoundCloud og viser nye DJ-sæt fra de kunstnere, du
 følger. Et sæt kommer kun med, når det
 
-1. nævner kunstneren i titlen (eller er uploadet af kunstneren selv),
+1. nævner kunstneren i titlen, uanset stavemåde (eller er uploadet af
+   kunstneren selv),
 2. er udgivet efter startdatoen og varer **over 30 minutter**, og
 3. har **god lyd**: mindst 60/100 i lydvurderingen.
 
@@ -37,8 +38,8 @@ gør.
    - Læg den i repoet under *Settings → Secrets and variables → Actions →
      New repository secret* med navnet `YOUTUBE_API_KEY`.
 
-   Kvoten rækker rigeligt: tre søgninger hver anden time bruger ca. 3.600 af
-   de 10.000 enheder, Google giver om dagen.
+   Kvoten rækker: seks søgninger hver anden time bruger ca. 7.300 af de
+   10.000 enheder, Google giver om dagen (se **Stavemåder** nedenfor).
 
 Fejler en kilde, står det under **Kilder ved seneste tjek** nederst på siden,
 og lysdioden i toppen bliver gul eller rød.
@@ -109,6 +110,25 @@ Alt det, der blev fundet men ikke levede op til kravene, ligger under
 
 ---
 
+## Stavemåder
+
+Kunstnere skriver tit deres navn med specialtegn, og uploadere skriver det på
+begge måder. Yousuke Yukimatsu hedder officielt **¥ØU$UK€ ¥UK1MAT$U**, mange
+skriver **YØU$UK€ YUK1MAT$U** eller **Yousuke Yukimatsu**, og på japansk
+**行松陽介**. YouTube og SoundCloud søger på tegnene, som de står, så hver
+stavemåde finder uploads, de andre overser.
+
+Derfor har hver kunstner en liste `searchNames`. Hver stavemåde på listen
+bliver søgt på **både YouTube og SoundCloud** ved hver scanning, og titler
+med en hvilken som helst af dem tæller som et match. Siden viser listen under
+**Søger efter**. Genkendelsen i titler tager desuden selv højde for
+store/små bogstaver, fuldbredde-tegn og "leetspeak" (`¥` for Y, `$` for S,
+`1` for I, `€` for E), så også fx "Yousuke Yuk1matsu" bliver fundet.
+
+Med en YouTube-nøgle koster hver YouTube-søgning 100 af de 10.000 daglige
+enheder. Seks søgninger hver anden time bruger ca. 7.300. Slipper kvoten op,
+bruger Sætradaren automatisk YouTubes almindelige søgeside resten af dagen.
+
 ## Tilføj en kunstner
 
 Alt om kunstnerne står i [`config/artists.json`](config/artists.json). Tilføj
@@ -121,18 +141,19 @@ et objekt mere i `artists`:
   "displayName": "DJ EKSEMPEL",
   "subtitle": "DJ Eksempel · Berlin",
   "trackingSince": "2026-11-01T00:00:00+01:00",
-  "aliases": ["dj eksempel", "eksempel"],
+  "searchNames": ["DJ Eksempel", "D.J. €K$€MP€L"],
+  "aliases": ["eksempel"],
   "links": {
     "soundcloud": "https://soundcloud.com/djeksempel",
     "residentAdvisor": "https://ra.co/dj/djeksempel"
   },
   "sources": {
     "youtube": {
-      "searchQueries": ["DJ Eksempel", "DJ Eksempel DJ set"],
+      "searchQueries": ["DJ Eksempel DJ set"],
       "channels": []
     },
     "soundcloud": {
-      "searchQueries": ["DJ Eksempel"],
+      "searchQueries": [],
       "users": ["djeksempel"]
     }
   }
@@ -141,9 +162,13 @@ et objekt mere i `artists`:
 
 - `id`: kort og unik, kun små bogstaver og bindestreger.
 - `trackingSince`: kun sæt udgivet efter dette tidspunkt bliver vist.
-- `aliases`: stavemåder titlen kan bruge. Store/små bogstaver, accenter,
-  fuldbredde-tegn og "leetspeak" (`¥` for Y, `$` for S, `1` for I, `€` for E)
-  er der allerede taget højde for.
+- `searchNames`: alle stavemåder af navnet, både med almindelige bogstaver og
+  med kunstnerens egne specialtegn. Hver af dem søges på alle platforme.
+- `aliases`: ekstra navne, der kun bruges til at genkende titler, fx efternavnet
+  alene. Store/små bogstaver, accenter, fuldbredde-tegn og "leetspeak" er der
+  allerede taget højde for.
+- `sources.*.searchQueries`: ekstra søgninger kun på den ene platform, fx
+  `"DJ Eksempel DJ set"`.
 - `sources.soundcloud.users`: kunstnerens egne profiler. Uploads derfra tæller
   med, også når titlen ikke nævner navnet, og får plus i lydvurderingen.
 - `sources.youtube.channels`: valgfrit, fx `"@boilerroom"`, hvis en kanal skal

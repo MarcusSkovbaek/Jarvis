@@ -21,14 +21,18 @@ window.SET_TRACKER_DEMO_DATA = function (now) {
       name: "Yousuke Yukimatsu",
       displayName: "¥ØU$UK€ ¥UK1MAT$U",
       subtitle: "Yousuke Yukimatsu · 行松陽介",
+      searchNames: ["Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "YØU$UK€ YUK1MAT$U", "Yosuke Yukimatsu", "行松陽介"],
       trackingSince: "2026-10-04T17:50:00Z",
       links: { soundcloud: sc, youtube: yt, residentAdvisor: "https://ra.co/dj/yosukeyukimatsu-jp" }
     }],
     health: [
       { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “Yousuke Yukimatsu”", ok: true, found: 40 },
-      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “行松陽介”", ok: true, found: 23 },
-      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “Yousuke Yukimatsu”", ok: true, found: 47 },
-      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-profil yousukeyukimatsu", ok: true, found: 18 }
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “¥ØU$UK€ ¥UK1MAT$U”", ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “YØU$UK€ YUK1MAT$U”", ok: true, found: 26 },
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “行松陽介”", ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “Yousuke Yukimatsu”", ok: true, found: 41 },
+      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “¥ØU$UK€ ¥UK1MAT$U”", ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “行松陽介”", ok: true, found: 27 }
     ],
     items: [
       {

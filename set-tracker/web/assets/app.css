@@ -323,7 +323,7 @@ a { color: inherit; }
 .plate {
   display: grid;
   gap: 14px;
-  padding-block: 30px 6px;
+  padding-block: 30px 24px;
 }
 
 .plate__eyebrow { display: inline-flex; align-items: center; gap: 8px; }
@@ -360,6 +360,19 @@ a { color: inherit; }
 }
 @media (hover: hover) { .chip-link:hover { border-color: var(--line-strong); background: var(--panel-2); } }
 
+/* The spellings searched for: the artist's own stylised name next to the plain one. */
+.spellings { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.spellings__list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.spellings__list li {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--step--1);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
 .criteria {
   display: flex;
   flex-wrap: wrap;
@@ -394,7 +407,7 @@ a { color: inherit; }
   flex-wrap: wrap;
   align-items: center;
   gap: 10px 12px;
-  padding-block: 22px 14px;
+  padding-block: 0 14px;
 }
 
 .seg {

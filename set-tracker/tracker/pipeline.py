@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -83,7 +84,11 @@ class Fetcher:
 
     def youtube_search(self, query, limit, since_iso):
         if self.key:
-            return sources.youtube_search_api(query, limit, since_iso, self.key)
+            try:
+                return sources.youtube_search_api(query, limit, since_iso, self.key)
+            except SourceError as e:
+                # Typically the daily quota: search the web page instead.
+                self.log(f"    YouTube API failed ({e}); using the search page instead")
         return sources.youtube_search_ytdlp(query, limit)
 
     def youtube_channel(self, channel, limit):
@@ -126,6 +131,39 @@ class Fetcher:
 # The scan
 # ---------------------------------------------------------------------------
 
+def search_queries(artist, platform):
+    """Every spelling of the artist's name, then the platform's own extra queries.
+
+    Uploaders write a stylised name both ways (¥ØU$UK€ ¥UK1MAT$U and Yousuke
+    Yukimatsu), and the search engines treat ¥, $ and € as text, so each
+    spelling finds uploads the others miss. Repeats are dropped, ignoring
+    case and full-width forms.
+    """
+    queries = [*artist.get("searchNames", []),
+               *artist.get("sources", {}).get(platform, {}).get("searchQueries", [])]
+    out, seen = [], set()
+    for q in queries:
+        key = unicodedata.normalize("NFKC", q or "").casefold().strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(q.strip())
+    return out
+
+
+def job_specs(artist):
+    """(platform, kind, value) for each search, channel and profile of an artist."""
+    src = artist.get("sources", {})
+    specs = [("youtube", "search", q) for q in search_queries(artist, "youtube")]
+    specs += [("youtube", "channel", ch) for ch in src.get("youtube", {}).get("channels", [])]
+    specs += [("soundcloud", "search", q) for q in search_queries(artist, "soundcloud")]
+    specs += [("soundcloud", "user", u) for u in src.get("soundcloud", {}).get("users", [])]
+    return specs
+
+
+def job_key(artist, platform, kind, value):
+    return f"{artist['id']}:{platform}:{kind}:{value}"
+
+
 class Scanner:
     def __init__(self, config, state, data, fetcher, now=None, log=print):
         self.config = config
@@ -133,12 +171,13 @@ class Scanner:
         self.trusted = config.get("trustedUploaders", [])
         self.state = state
         self.seen = state.setdefault("seen", {})
-        # "artist:platform" once a scan of that platform has succeeded. Kept per
-        # platform: if YouTube fails on the first run and SoundCloud works, the
-        # YouTube uploads that already exist must still be noted before any of
-        # them can count as new. (Older state listed bare artist ids; those are
-        # ignored, which only means one more baseline pass.)
-        self.baselined = {b for b in state.get("baselined", []) if ":" in b}
+        # One key per search, profile or channel (see job_key) once it has
+        # answered. The first answer of a search is a baseline: everything in
+        # it was online already. Kept per search, because a search that fails
+        # on the first run, or a spelling added to the config later, finds
+        # old uploads the others never listed. (Older state kept one key per
+        # artist or platform; those are ignored, which costs one more baseline.)
+        self.baselined = {b for b in state.get("baselined", []) if b.count(":") >= 3}
         self.items = {it["id"]: it for it in data.get("items", [])}
         self.fetch = fetcher
         self.now = now or datetime.now(timezone.utc)
@@ -151,7 +190,9 @@ class Scanner:
     # -- helpers ------------------------------------------------------------
 
     def _aliases(self, artist):
-        return [a for a in [artist.get("name"), artist.get("displayName"), *artist.get("aliases", [])] if a]
+        names = [artist.get("name"), artist.get("displayName"), *artist.get("searchNames", []),
+                 *artist.get("aliases", [])]
+        return [a for a in names if a]
 
     def _own(self, artist, item):
         url = (item.get("uploaderUrl") or "").lower().rstrip("/")
@@ -168,17 +209,19 @@ class Scanner:
         }
 
     def _jobs(self, artist):
-        src = artist.get("sources", {})
+        """(platform, label, key, fetch) for every search, channel and profile."""
         since = iso(parse_time(artist["trackingSince"]))
-        yt, sc = src.get("youtube", {}), src.get("soundcloud", {})
-        for q in yt.get("searchQueries", []):
-            yield "youtube", f"YouTube-søgning “{q}”", lambda q=q: self.fetch.youtube_search(q, self.limit, since)
-        for ch in yt.get("channels", []):
-            yield "youtube", f"YouTube-kanal {ch}", lambda ch=ch: self.fetch.youtube_channel(ch, self.limit)
-        for q in sc.get("searchQueries", []):
-            yield "soundcloud", f"SoundCloud-søgning “{q}”", lambda q=q: self.fetch.soundcloud_search(q, self.limit)
-        for u in sc.get("users", []):
-            yield "soundcloud", f"SoundCloud-profil {u}", lambda u=u: self.fetch.soundcloud_user(u, self.limit)
+        fetch = {
+            ("youtube", "search"): lambda q: self.fetch.youtube_search(q, self.limit, since),
+            ("youtube", "channel"): lambda ch: self.fetch.youtube_channel(ch, self.limit),
+            ("soundcloud", "search"): lambda q: self.fetch.soundcloud_search(q, self.limit),
+            ("soundcloud", "user"): lambda u: self.fetch.soundcloud_user(u, self.limit),
+        }
+        labels = {("youtube", "search"): "YouTube-søgning “{}”", ("youtube", "channel"): "YouTube-kanal {}",
+                  ("soundcloud", "search"): "SoundCloud-søgning “{}”", ("soundcloud", "user"): "SoundCloud-profil {}"}
+        for platform, kind, value in job_specs(artist):
+            yield (platform, labels[(platform, kind)].format(value), job_key(artist, platform, kind, value),
+                   lambda f=fetch[(platform, kind)], v=value: f(v))
 
     # -- judging ------------------------------------------------------------
 
@@ -348,17 +391,20 @@ class Scanner:
     def run(self):
         for artist in self.config["artists"]:
             since = parse_time(artist["trackingSince"])
-            fresh = [pf for pf in ("youtube", "soundcloud") if f"{artist['id']}:{pf}" not in self.baselined]
+            fresh = [f"{pf} {kind} {value}" for pf, kind, value in job_specs(artist)
+                     if job_key(artist, pf, kind, value) not in self.baselined]
             self.log(f"{artist['name']}: tracking since {iso(since)}"
-                     f"{' (baseline for ' + ', '.join(fresh) + ')' if fresh else ''}")
-            batch = {}
-            for platform, label, job in self._jobs(artist):
+                     f"{' (first look, taken as baseline: ' + '; '.join(fresh) + ')' if fresh else ''}")
+            batch, found_by, answered = {}, {}, []
+            for platform, label, key, job in self._jobs(artist):
                 entry = {"artistId": artist["id"], "platform": platform, "label": label, "at": iso(self.now)}
                 try:
                     found = job()
                     entry.update(ok=True, found=len(found))
+                    answered.append(key)
                     for it in found:
                         batch.setdefault(it["id"], it)
+                        found_by.setdefault(it["id"], set()).add(key)
                 except SourceError as e:
                     entry.update(ok=False, found=0, error=str(e))
                 except Exception as e:
@@ -370,18 +416,14 @@ class Scanner:
             handled = set()
             ordered = sorted(batch.values(), key=lambda it: it.get("publishedAt") or "9999")
             for it in ordered:
-                first = f"{artist['id']}:{it['platform']}" not in self.baselined
+                # Only searches that have answered before can tell new from old.
+                first = not (found_by[it["id"]] & self.baselined)
                 stored = self.consider(it, artist, since, first)
                 if stored:
                     handled.add(stored["id"])
             self.recheck_pending(artist, since, handled)
             self.dedupe(artist, handled)
-
-            # A platform's baseline is done once one of its sources answered;
-            # until then its old uploads could be mistaken for new ones.
-            for h in self.health:
-                if h["artistId"] == artist["id"] and h["ok"]:
-                    self.baselined.add(f"{artist['id']}:{h['platform']}")
+            self.baselined.update(answered)
         self.prune()
         self.state["baselined"] = sorted(self.baselined)
         return self.output()
@@ -403,6 +445,7 @@ class Scanner:
         artists = [{
             "id": a["id"], "name": a["name"], "displayName": a.get("displayName") or a["name"],
             "subtitle": a.get("subtitle") or (a["name"] if a.get("displayName") not in (None, a["name"]) else ""),
+            "searchNames": [q for q in search_queries({"searchNames": a.get("searchNames", [])}, "")] or [a["name"]],
             "trackingSince": iso(parse_time(a["trackingSince"])), "links": a.get("links", {}),
         } for a in self.config["artists"]]
         items = []
@@ -540,6 +583,10 @@ def validate_config(config):
             parse_time(a.get("trackingSince"))
         except Exception:
             problems.append(f"artist {a.get('id')}: trackingSince er ikke en gyldig dato")
+        if a.get("sources") and not (search_queries(a, "youtube") or search_queries(a, "soundcloud")
+                                     or a["sources"].get("soundcloud", {}).get("users")
+                                     or a["sources"].get("youtube", {}).get("channels")):
+            problems.append(f"artist {a.get('id')}: ingen searchNames, søgninger eller profiler at holde øje med")
     if not config.get("artists"):
         problems.append("ingen kunstnere i config")
     return problems
