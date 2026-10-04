@@ -12,8 +12,13 @@ The score starts at BASE and every finding moves it up or down. Each finding
 carries a Danish sentence so the page can show why a set was accepted or not.
 """
 
+import re
 import shutil
 import subprocess
+import tempfile
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
 import numpy as np
 
@@ -66,6 +71,83 @@ def decode(path, seconds=None):
     cmd += ["-ac", "2", "-ar", str(SAMPLE_RATE), "-f", "f32le", "-"]
     raw = subprocess.run(cmd, capture_output=True, check=True, timeout=180).stdout
     return np.frombuffer(raw, dtype=np.float32).reshape(-1, 2)
+
+
+def _http_text(url, headers):
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def hls_window(url, headers, start, seconds, folder):
+    """A small local playlist with only the HLS segments covering an excerpt.
+
+    ffmpeg cannot seek into HLS with fMP4 segments (SoundCloud's format):
+    asked to start at 20 minutes it returns nothing. Given just the right
+    segments, it reads them like any short file. Returns (path, offset of
+    the excerpt within the first segment).
+    """
+    text = _http_text(url, headers)
+    if "#EXT-X-STREAM-INF" in text:               # a master playlist: take the first variant
+        variant = next(l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#"))
+        url = urllib.parse.urljoin(url, variant)
+        text = _http_text(url, headers)
+
+    def absolute(line):
+        return re.sub(r'URI="([^"]+)"', lambda m: f'URI="{urllib.parse.urljoin(url, m.group(1))}"', line)
+
+    header, segments, pending, t = [], [], [], 0.0
+    lines = iter(text.splitlines())
+    for line in lines:
+        line = line.strip()
+        if line.startswith(("#EXT-X-MAP", "#EXT-X-KEY")):
+            (pending if segments else header).append(absolute(line))
+        elif line.startswith("#EXTINF:"):
+            duration = float(line[8:].split(",")[0])
+            uri = next((l.strip() for l in lines if l.strip() and not l.startswith("#")), None)
+            if uri is None:
+                break
+            segments.append((t, duration, pending + [line], urllib.parse.urljoin(url, uri)))
+            pending, t = [], t + duration
+    chosen = [sg for sg in segments if sg[0] + sg[1] > start and sg[0] < start + seconds]
+    if not chosen:
+        raise ValueError("udsnittet ligger uden for afspilningslisten")
+    target = max(int(sg[1]) + 1 for sg in chosen)
+    out = ["#EXTM3U", "#EXT-X-VERSION:7", f"#EXT-X-TARGETDURATION:{target}", "#EXT-X-PLAYLIST-TYPE:VOD", *header]
+    for _, _, tags, uri in chosen:
+        out += tags + [uri]
+    out.append("#EXT-X-ENDLIST")
+    path = Path(folder) / "window.m3u8"
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return path, start - chosen[0][0]
+
+
+def _ffmpeg_pcm(args, headers=None):
+    cmd = ["ffmpeg", "-v", "error", "-nostdin"]
+    if headers:
+        cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+    cmd += args + ["-vn", "-ac", "2", "-ar", str(SAMPLE_RATE), "-f", "f32le", "-"]
+    run = subprocess.run(cmd, capture_output=True, timeout=240)
+    if run.returncode != 0:
+        tail = run.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or [f"exit {run.returncode}"]
+        raise RuntimeError(f"ffmpeg: {tail[0][:200]}")
+    return np.frombuffer(run.stdout, dtype=np.float32).reshape(-1, 2)
+
+
+def decode_stream(url, headers, start, seconds, protocol=""):
+    """Decode `seconds` of audio from `start` straight off a stream URL."""
+    if "m3u8" in (protocol or "") or ".m3u8" in urllib.parse.urlparse(url).path:
+        with tempfile.TemporaryDirectory(prefix="set-tracker-") as tmp:
+            playlist, offset = hls_window(url, headers, start, seconds, tmp)
+            # The playlist is a local file now; its segment links are signed
+            # URLs that need no headers (and -headers would not apply to a file).
+            return _ffmpeg_pcm(["-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+                                "-i", str(playlist), "-ss", f"{offset:.2f}", "-t", str(int(seconds))])
+    samples = _ffmpeg_pcm(["-ss", str(int(start)), "-i", url, "-t", str(int(seconds))], headers)
+    if len(samples) < SAMPLE_RATE * seconds * 0.8:
+        # Some containers do not seek on input; read up to the excerpt instead.
+        samples = _ffmpeg_pcm(["-i", url, "-ss", str(int(start)), "-t", str(int(seconds))], headers)
+    return samples
 
 
 def _db(x):
@@ -206,6 +288,9 @@ def metadata_signals(item, trusted, own_account, title_findings):
     elif trusted:
         out.append({"code": "trusted", "impact": 12,
                     "text": f"Uploadet af en kendt platform ({item.get('uploader')})"})
+    elif item.get("uploaderVerified"):
+        out.append({"code": "verified", "impact": 6,
+                    "text": f"Uploadet af en verificeret kanal ({item.get('uploader')})"})
 
     eff = (item.get("audio") or {}).get("effectiveKbps")
     raw = (item.get("audio") or {}).get("kbps")

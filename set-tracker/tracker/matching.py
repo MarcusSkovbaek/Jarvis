@@ -53,7 +53,7 @@ def _has(text, pattern):
 TITLE_RULES = [
     ("phone", r"\b(i ?phone|phone|smartphone|mobile ?recording)\b|スマホ|携帯",
      -45, "Titlen tyder på en telefonoptagelse"),
-    ("crowd", r"\b(crowd|audience) (recording|footage|cam)\b|\bfrom the crowd\b",
+    ("crowd", r"\b(crowd|audience) (recording|footage|cam)\b|\bfrom the (crowd|floor)\b|\bfan ?cam\b|\bfront row\b|\bpov\b",
      -35, "Titlen tyder på en publikumsoptagelse"),
     ("partial", r"\b(snippet|excerpt|teaser|trailer|preview|highlights?|clip)\b",
      -30, "Titlen tyder på et uddrag, ikke et helt sæt"),

@@ -43,10 +43,10 @@ PHONE = {"rmsDb": -16.0, "sideDb": -60.0, "clipFraction": 0.01, "silenceFraction
          "cutoffHz": 7500, "bassDb": -25.0}
 
 
-def yt(vid, title, minutes, published="2026-10-06T18:00:00Z", uploader="Some Channel", **kw):
+def yt(vid, title, minutes, published="2026-10-06T18:00:00Z", uploader="Some Channel", precision=None, **kw):
     return sources._item("youtube", vid, url=f"https://www.youtube.com/watch?v={vid}", title=title,
                          uploader=uploader, durationSec=int(minutes * 60) if minutes else None,
-                         publishedAt=published, publishedPrecision="datetime" if published else None, **kw)
+                         publishedAt=published, publishedPrecision=precision or ("datetime" if published else None), **kw)
 
 
 def sc(tid, title, minutes, published="2026-10-06T18:00:00Z", uploader="someone", uploader_url=None, **kw):
@@ -100,8 +100,11 @@ class FakeFetcher:
         return m
 
 
+BASELINED = {"baselined": ["yy:youtube", "yy:soundcloud"]}
+
+
 def scan(fetcher, state=None, data=None, now=NOW, config=CONFIG):
-    s = pipeline.Scanner(copy.deepcopy(config), state if state is not None else {"baselined": ["yy"]},
+    s = pipeline.Scanner(copy.deepcopy(config), state if state is not None else copy.deepcopy(BASELINED),
                          data or {}, fetcher, now=now, log=lambda *a: None)
     return s, s.run()
 
@@ -244,6 +247,59 @@ class Quality(unittest.TestCase):
             self.assertAlmostEqual(len(samples) / quality.SAMPLE_RATE, 8, delta=0.1)
             self.assertIn("cutoffHz", quality.measure(samples))
 
+    def test_hls_window_picks_the_segments_of_an_excerpt(self):
+        playlist = "\n".join(["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:10",
+                               '#EXT-X-MAP:URI="init.mp4"'] +
+                              [f"#EXTINF:10.0,\nseg{i}.m4s" for i in range(30)] + ["#EXT-X-ENDLIST"])
+        master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=160000\naudio/index.m3u8\n"
+        pages = {"https://cdn.example/a/master.m3u8": master, "https://cdn.example/a/audio/index.m3u8": playlist}
+        original = quality._http_text
+        quality._http_text = lambda url, headers: pages[url]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path, offset = quality.hls_window("https://cdn.example/a/master.m3u8", {}, 72, 20, tmp)
+                text = path.read_text()
+                self.assertEqual(offset, 2.0)
+                self.assertIn('#EXT-X-MAP:URI="https://cdn.example/a/audio/init.mp4"', text)
+                self.assertEqual([l for l in text.splitlines() if l.endswith(".m4s")],
+                                 [f"https://cdn.example/a/audio/seg{i}.m4s" for i in (7, 8, 9)])
+                with self.assertRaises(ValueError):
+                    quality.hls_window("https://cdn.example/a/master.m3u8", {}, 9999, 20, tmp)
+        finally:
+            quality._http_text = original
+
+    def test_excerpts_from_hls_fmp4_end_to_end(self):
+        """SoundCloud serves fMP4 HLS, which plain ffmpeg seeking cannot read."""
+        if not quality.ffmpeg_available():
+            self.skipTest("ffmpeg not installed")
+        import functools
+        import http.server
+        import os
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=120:c=pink:a=0.3",
+                            "-ac", "2", "-c:a", "aac", "-b:a", "128k", "-f", "hls", "-hls_time", "10",
+                            "-hls_segment_type", "fmp4", "-hls_playlist_type", "vod", str(Path(tmp) / "a.m3u8")],
+                           check=True)
+            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=tmp)
+            handler.log_message = lambda *a: None
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            saved = {k: os.environ.get(k) for k in ("no_proxy", "NO_PROXY")}
+            os.environ["no_proxy"] = os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+            try:
+                url = f"http://127.0.0.1:{server.server_address[1]}/a.m3u8"
+                samples = quality.decode_stream(url, {}, 60, 15, "m3u8_native")
+                self.assertAlmostEqual(len(samples) / quality.SAMPLE_RATE, 15, delta=0.5)
+                self.assertGreater(quality.measure(samples)["cutoffHz"], 12000)
+            finally:
+                server.shutdown()
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
     def test_bitrate_by_codec(self):
         eff, codec, raw = quality.effective_bitrate([
             {"acodec": "opus", "abr": 160, "vcodec": "none"},
@@ -291,6 +347,27 @@ class Sources(unittest.TestCase):
         self.assertEqual(it["durationSec"], 3700)
         self.assertEqual(it["publishedPrecision"], "datetime")
         self.assertTrue(it["thumbnail"].endswith("-t500x500.jpg"))
+
+    def test_flat_youtube_dates_are_approximate(self):
+        it = sources.from_ytdlp({"_type": "url", "ie_key": "Youtube", "id": "abcdefghijk", "title": "x",
+                                 "url": "https://www.youtube.com/watch?v=abcdefghijk", "timestamp": 1791000000})
+        self.assertEqual(it["publishedPrecision"], "approx")
+        full = sources.from_ytdlp({"extractor_key": "Youtube", "id": "abcdefghijk", "title": "x", "timestamp": 1791000000,
+                                   "webpage_url": "https://www.youtube.com/watch?v=abcdefghijk"})
+        self.assertEqual(full["publishedPrecision"], "datetime")
+
+    def test_only_videos_from_youtube_listings(self):
+        keep = {"ie_key": "Youtube", "id": "YcBVJ6A5Zpg"}
+        drop = [{"ie_key": "YoutubeTab", "id": "UCxsM4c_lbbqtqBfdCHnuZhQ"},
+                {"ie_key": "YoutubeTab", "id": "PLgZPLMzFruKw1CZQDZrDPVRBiRtaqzvGE"},
+                {"ie_key": "Youtube", "id": "RDT1tcUfUhR5U"}]
+        self.assertTrue(sources._is_video(keep))
+        self.assertFalse(any(sources._is_video(e) for e in drop))
+
+    def test_search_url_sorts_by_date_and_keeps_videos(self):
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(sources.youtube_search_url("行松陽介")).query)
+        self.assertEqual(q, {"search_query": ["行松陽介"], "sp": ["CAISAhAB"]})
 
     def test_ytdlp_youtube_date_only(self):
         it = sources.from_ytdlp({"ie_key": "Youtube", "id": "v1", "url": "https://www.youtube.com/watch?v=v1",
@@ -363,14 +440,27 @@ class Pipeline(unittest.TestCase):
         _, out = scan(f)
         self.assertEqual(by_id(out)["yt:q"]["status"], "rejected")
 
-    def test_analysis_failure_keeps_set_but_marks_unverified(self):
-        f = FakeFetcher(yt_results=[yt("r", "Yousuke Yukimatsu DJ set", 75)],
-                        analysis={"yt:r": SourceError("blocked")})
+    def test_unmeasured_sound_needs_a_known_or_verified_uploader(self):
+        blocked = SourceError("Sign in to confirm you're not a bot")
+        f = FakeFetcher(yt_results=[yt("r", "Yousuke Yukimatsu DJ set", 75, uploader="random fan"),
+                                    yt("t", "¥ØU$UK€ ¥UK1MAT$U | Boiler Room: Osaka", 75, uploader="Boiler Room"),
+                                    yt("v", "Yousuke Yukimatsu - Festival 2026 (Full Set)", 75, uploader="Some Festival",
+                                       uploaderVerified=True)],
+                        analysis={"yt:r": blocked, "yt:t": blocked, "yt:v": blocked})
         _, out = scan(f)
-        item = by_id(out)["yt:r"]
-        self.assertEqual(item["status"], "accepted")
-        self.assertFalse(item["quality"]["verified"])
-        self.assertEqual(item["quality"]["analysisError"], "blocked")
+        items = by_id(out)
+        self.assertEqual(items["yt:r"]["status"], "rejected")
+        self.assertIn("hverken kendt eller verificeret", items["yt:r"]["reasons"][0])
+        for vid in ("yt:t", "yt:v"):
+            self.assertEqual(items[vid]["status"], "accepted", vid)
+            self.assertFalse(items[vid]["quality"]["verified"])
+            self.assertIn("not a bot", items[vid]["quality"]["analysisError"])
+        self.assertIn("verified", {s["code"] for s in items["yt:v"]["quality"]["signals"]})
+
+    def test_crowd_words(self):
+        codes = lambda t: {s["code"] for s in matching.title_signals(t)}  # noqa: E731
+        for title in ["Yukimatsu fancam ultra", "Yukimatsu front row", "POV: Yukimatsu drops gabber"]:
+            self.assertIn("crowd", codes(title), title)
 
     def test_first_run_baselines_undated_results(self):
         f = FakeFetcher(yt_results=[yt("z", "Yukimatsu set", 70, published=None)],
@@ -379,7 +469,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(out["items"], [])
         self.assertEqual(s.seen["yt:z"]["reason"], "baseline")
         self.assertNotIn(("enrich", "yt:z"), f.calls)
-        self.assertIn("yy", s.state["baselined"])
+        self.assertIn("yy:youtube", s.state["baselined"])
 
     def test_after_baseline_undated_new_item_uses_first_seen(self):
         f = FakeFetcher(yt_results=[yt("n", "Yukimatsu set", 70, published=None)],
@@ -392,7 +482,7 @@ class Pipeline(unittest.TestCase):
     def test_baseline_not_marked_done_when_all_sources_fail(self):
         f = FakeFetcher(fail={"youtube", "soundcloud"})
         s, out = scan(f, state={})
-        self.assertNotIn("yy", s.state["baselined"])
+        self.assertEqual(s.state["baselined"], [])
         self.assertFalse(out["scanOk"])
         self.assertTrue(all(not h["ok"] and h["error"] for h in out["health"]))
 
@@ -449,6 +539,39 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(item["status"], "rejected")
         self.assertIn("Genupload", item["reasons"][0])
 
+    def test_baseline_is_per_platform(self):
+        # What happened on the first real run: YouTube failed, SoundCloud worked.
+        old_video = yt("v", "¥ØU$UK€ ¥UK1MAT$U - Coachella 2026 (Full Set)", 70, published=None)
+        s, out = scan(FakeFetcher(yt_results=[old_video], fail={"youtube"}), state={})
+        self.assertEqual(s.state["baselined"], ["yy:soundcloud"])
+        # Next run YouTube answers: its existing videos are baseline, not news.
+        f2 = FakeFetcher(yt_results=[old_video], enrich={"yt:v": SourceError("bot check")})
+        s2, out2 = scan(f2, state=s.state, data=out, now=NOW + timedelta(hours=2))
+        self.assertEqual(out2["items"], [])
+        self.assertEqual(s2.seen["yt:v"]["reason"], "baseline")
+        self.assertIn("yy:youtube", s2.state["baselined"])
+
+    def test_legacy_artist_level_baseline_is_redone(self):
+        old_video = yt("v", "Yukimatsu live set", 70, published=None)
+        s, out = scan(FakeFetcher(yt_results=[old_video]), state={"baselined": ["yy"]})
+        self.assertEqual(out["items"], [])
+        self.assertEqual(s.seen["yt:v"]["reason"], "baseline")
+
+    def test_approximate_dates_from_listings(self):
+        def approx(vid, title, hours_ago):
+            return yt(vid, title, 70, published=pipeline.iso(NOW - timedelta(hours=hours_ago)), precision="approx")
+        # First look at YouTube: an approximate date is not proof of being new.
+        s, out = scan(FakeFetcher(yt_results=[approx("a", "Yukimatsu set", 5)]), state={"baselined": ["yy:soundcloud"]})
+        self.assertEqual(s.seen["yt:a"]["reason"], "baseline")
+        # After the baseline: three weeks ago is old, two hours ago is new.
+        f = FakeFetcher(yt_results=[approx("o", "Yukimatsu old set", 24 * 21), approx("n", "Yukimatsu new set", 2)],
+                        enrich={"yt:o": SourceError("bot"), "yt:n": SourceError("bot")})
+        s2, out2 = scan(f)
+        self.assertEqual(s2.seen["yt:o"]["reason"], "before")
+        self.assertNotIn(("enrich", "yt:o"), f.calls)
+        self.assertEqual(by_id(out2)["yt:n"]["status"], "accepted")
+        self.assertEqual(by_id(out2)["yt:n"]["publishedPrecision"], "approx")
+
     def test_reupload_of_baseline_set_rejected(self):
         old = yt("o", "Yousuke Yukimatsu | Boiler Room Tokyo", 60.5, published=None)
         s, out = scan(FakeFetcher(yt_results=[old], enrich={"yt:o": SourceError("bot check")}), state={})
@@ -498,7 +621,8 @@ class Pipeline(unittest.TestCase):
         cfg = copy.deepcopy(CONFIG)
         cfg["artists"].append(other)
         f = FakeFetcher(yt_results=[yt("a", "Yukimatsu DJ set", 62), yt("b", "DJ Other – live", 90)])
-        _, out = scan(f, state={"baselined": ["yy", "other"]}, config=cfg)
+        _, out = scan(f, state={"baselined": ["yy:youtube", "yy:soundcloud", "other:youtube", "other:soundcloud"]},
+                      config=cfg)
         items = by_id(out)
         self.assertEqual(items["yt:a"]["artistId"], "yy")
         self.assertEqual(items["yt:b"]["artistId"], "other")

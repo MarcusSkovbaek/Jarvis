@@ -26,9 +26,12 @@ gør.
 2. **Start første scanning.** *Actions → Sætradar → Run workflow*. Herefter
    kører den af sig selv hver anden time. Den første kørsel noterer alt, der
    allerede findes, så kun nye uploads bliver vist.
-3. **Anbefalet: en YouTube-nøgle.** YouTube afviser ofte søgninger fra GitHubs
-   servere ("Sign in to confirm you're not a bot"). Med en gratis nøgle til
-   YouTube Data API v3 er søgningen stabil og får præcise udgivelsestider:
+3. **Anbefalet: en YouTube-nøgle.** YouTube lader GitHubs servere søge, men
+   afviser dem på selve videosiderne ("Sign in to confirm you're not a bot").
+   Uden nøgle kender Sætradaren derfor kun den omtrentlige alder fra
+   søgeresultatet ("for 3 dage siden"), og lyden på YouTube kan ikke måles.
+   Med en gratis nøgle til YouTube Data API v3 får den præcise
+   udgivelsestider:
    - Opret en nøgle på https://console.cloud.google.com/apis/credentials
      (aktivér først *YouTube Data API v3* for projektet).
    - Læg den i repoet under *Settings → Secrets and variables → Actions →
@@ -39,6 +42,22 @@ gør.
 
 Fejler en kilde, står det under **Kilder ved seneste tjek** nederst på siden,
 og lysdioden i toppen bliver gul eller rød.
+
+### Vedligehold
+
+Under *Actions → Sætradar → Run workflow* kan du også:
+
+- **probe**: indsæt et eller flere links til sæt. De bliver hentet og vurderet
+  fra ende til anden, og resultatet står i kørslens oversigt. Brug det til at
+  se, om download og lydmåling stadig virker fra GitHub, eller hvorfor et sæt
+  blev frasorteret.
+- **reset**: glemmer alle gemte fund og tager en ny baseline. Hørt-markeringer
+  i dine browsere bliver ikke rørt.
+
+Avanceret og valgfrit: lyden på YouTube kan måles, hvis yt-dlp får cookies fra
+en YouTube-konto (secret `YTDLP_COOKIES` med indholdet af en `cookies.txt`).
+Brug i så fald en konto, du kan undvære: YouTube kan spærre konti, der bruges
+fra servere.
 
 ### På iPhone
 
@@ -64,6 +83,7 @@ Scoren starter på 62 og flyttes op og ned af det, der bliver fundet. Under
 | Hvad | Effekt |
 |---|---|
 | Uploadet af kunstneren selv eller en kendt platform (Boiler Room, NTS, HÖR, The Lot Radio, …) | +12 |
+| Uploadet af en verificeret YouTube-kanal (fx en festival) | +6 |
 | Lyd helt op til 15,5 kHz eller mere | +12 |
 | Fyldig bas | +3 |
 | God/høj bitrate | +3 / +4 |
@@ -74,8 +94,12 @@ Scoren starter på 62 og flyttes op og ned af det, der bliver fundet. Under
 | Lange stille passager, meget lav lydstyrke, mono | −6 til −30 |
 
 Lyden måles på to udsnit à 45 sekunder fra midten af sættet (30 % og 65 %
-inde). Kan udsnittene ikke hentes, vurderes sættet på uploader, bitrate og
-titel, og det står som **ikke lydmålt**.
+inde). Kan udsnittene ikke hentes (typisk på YouTube, se ovenfor), vurderes
+sættet på uploader, bitrate og titel og står som **ikke lydmålt**. Så kræves
+der også en uploader, man kan stole på: kunstneren selv, en kendt platform
+eller en verificeret kanal. Ellers lander det under **Frasorteret** med den
+begrundelse. Vil du altid have en bestemt kanal med, så tilføj den til
+`trustedUploaders` i `config/artists.json`.
 
 Genuploads af ældre sæt bliver sorteret fra. Lægges samme sæt både på YouTube
 og SoundCloud, vises det én gang med et "Også på"-link.

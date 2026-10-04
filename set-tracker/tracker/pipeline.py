@@ -15,7 +15,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -50,19 +49,27 @@ def parse_time(text):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def published_after(item, since):
-    """Was this published after the tracking start?
+APPROX_SLACK = timedelta(hours=36)
 
-    A date without a time (common on YouTube via yt-dlp) is compared by
-    calendar day, inclusively: an upload dated on the start day may well be
-    later than the start time, and the first-run baseline already catches the
-    ones that were online before tracking began.
+
+def published_after(item, since):
+    """Was this published after the tracking start? None when unknown.
+
+    A date without a time is compared by calendar day, inclusively: an upload
+    dated on the start day may well be later than the start time. An
+    approximate time ("3 days ago" in a YouTube listing) gets 36 hours of
+    slack; anything that old was online before the first scan and is caught
+    by the baseline instead.
     """
     if not item.get("publishedAt"):
         return None
-    if item.get("publishedPrecision") == "date":
+    precision = item.get("publishedPrecision")
+    if precision == "date":
         return item["publishedAt"][:10] >= since.date().isoformat()
-    return parse_time(item["publishedAt"]) > since
+    when = parse_time(item["publishedAt"])
+    if precision == "approx":
+        return when >= since - APPROX_SLACK
+    return when > since
 
 
 # ---------------------------------------------------------------------------
@@ -101,19 +108,18 @@ class Fetcher:
     def analyze(self, item, segment_seconds):
         if not quality.ffmpeg_available():
             raise SourceError("ffmpeg mangler på maskinen")
+        url, headers, protocol = sources.audio_stream(item)
         duration = item["durationSec"]
-        starts = [int(duration * 0.30), int(duration * 0.65)]
-        with tempfile.TemporaryDirectory(prefix="set-tracker-") as tmp:
-            files = sources.excerpts(item, starts, segment_seconds, tmp)
-            parts = []
-            for f in files:
-                try:
-                    parts.append(quality.measure(quality.decode(f, seconds=segment_seconds + 5)))
-                except Exception as e:      # one bad excerpt should not sink the other
-                    self.log(f"    excerpt {f.name}: {e}")
-            if not parts:
-                raise SourceError("lydudsnittene kunne ikke hentes")
-            return quality.merge_measurements(parts)
+        parts, errors = [], []
+        for start in (int(duration * 0.30), int(duration * 0.65)):
+            try:
+                parts.append(quality.measure(quality.decode_stream(url, headers, start, segment_seconds, protocol)))
+            except Exception as e:          # one bad excerpt should not sink the other
+                errors.append(str(e))
+                self.log(f"    excerpt at {start} s: {e}")
+        if not parts:
+            raise SourceError("lydudsnittene kunne ikke læses" + (f" ({errors[0]})" if errors else ""))
+        return quality.merge_measurements(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +133,12 @@ class Scanner:
         self.trusted = config.get("trustedUploaders", [])
         self.state = state
         self.seen = state.setdefault("seen", {})
-        self.baselined = set(state.get("baselined", []))
+        # "artist:platform" once a scan of that platform has succeeded. Kept per
+        # platform: if YouTube fails on the first run and SoundCloud works, the
+        # YouTube uploads that already exist must still be noted before any of
+        # them can count as new. (Older state listed bare artist ids; those are
+        # ignored, which only means one more baseline pass.)
+        self.baselined = {b for b in state.get("baselined", []) if ":" in b}
         self.items = {it["id"]: it for it in data.get("items", [])}
         self.fetch = fetcher
         self.now = now or datetime.now(timezone.utc)
@@ -205,6 +216,7 @@ class Scanner:
                 analysis_error = f"{type(e).__name__}: {e}"
 
         score = quality.score(signals)
+        vouched = own or trusted or bool(item.get("uploaderVerified"))
         item["quality"] = {
             "score": score,
             "label": quality.label_for(score),
@@ -213,7 +225,12 @@ class Scanner:
             "verified": analysis is not None,
             "analysisError": analysis_error,
         }
-        if score >= self.min_score:
+        if analysis is None and not vouched:
+            # Without a measurement the score rests on words alone; that is
+            # only good enough when the uploader can be trusted.
+            item["status"] = "rejected"
+            item["reasons"] = ["Lyden kunne ikke måles, og uploaderen er hverken kendt eller verificeret"]
+        elif score >= self.min_score:
             item["status"] = "accepted"
         else:
             item["status"] = "rejected"
@@ -242,7 +259,9 @@ class Scanner:
             # Tracks, edits and clips: never sets, so not worth showing either.
             self._remember(item, artist, "short")
             return None
-        if first_run and not item.get("publishedAt"):
+        if first_run and item.get("publishedPrecision") != "datetime":
+            # The scanner's first look at this platform: anything it cannot
+            # date exactly was online already.
             self._remember(item, artist, "baseline")
             return None
 
@@ -329,8 +348,9 @@ class Scanner:
     def run(self):
         for artist in self.config["artists"]:
             since = parse_time(artist["trackingSince"])
-            first_run = artist["id"] not in self.baselined
-            self.log(f"{artist['name']}: tracking since {iso(since)}{' (first run: baseline)' if first_run else ''}")
+            fresh = [pf for pf in ("youtube", "soundcloud") if f"{artist['id']}:{pf}" not in self.baselined]
+            self.log(f"{artist['name']}: tracking since {iso(since)}"
+                     f"{' (baseline for ' + ', '.join(fresh) + ')' if fresh else ''}")
             batch = {}
             for platform, label, job in self._jobs(artist):
                 entry = {"artistId": artist["id"], "platform": platform, "label": label, "at": iso(self.now)}
@@ -350,16 +370,18 @@ class Scanner:
             handled = set()
             ordered = sorted(batch.values(), key=lambda it: it.get("publishedAt") or "9999")
             for it in ordered:
-                stored = self.consider(it, artist, since, first_run)
+                first = f"{artist['id']}:{it['platform']}" not in self.baselined
+                stored = self.consider(it, artist, since, first)
                 if stored:
                     handled.add(stored["id"])
             self.recheck_pending(artist, since, handled)
             self.dedupe(artist, handled)
 
-            # Only call the baseline done when at least one source answered;
-            # otherwise the next run would mistake old uploads for new ones.
-            if any(h["ok"] for h in self.health if h["artistId"] == artist["id"]):
-                self.baselined.add(artist["id"])
+            # A platform's baseline is done once one of its sources answered;
+            # until then its old uploads could be mistaken for new ones.
+            for h in self.health:
+                if h["artistId"] == artist["id"] and h["ok"]:
+                    self.baselined.add(f"{artist['id']}:{h['platform']}")
         self.prune()
         self.state["baselined"] = sorted(self.baselined)
         return self.output()

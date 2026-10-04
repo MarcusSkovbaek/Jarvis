@@ -12,6 +12,11 @@ on:
         description: "Health check: links to uploads to judge end to end (space separated). Leave empty for a normal scan."
         required: false
         default: ""
+      reset:
+        description: "Start over: forget saved results and take a new baseline (heard marks in browsers are kept)."
+        type: boolean
+        required: false
+        default: false
   push:
     paths:
       - "set-tracker/**"
@@ -64,6 +69,7 @@ jobs:
 
       - name: Fetch saved data
         id: saved
+        if: github.event_name != 'workflow_dispatch' || !inputs.reset
         continue-on-error: true
         uses: actions/checkout@v5
         with:

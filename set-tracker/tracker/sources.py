@@ -46,10 +46,16 @@ def _item(platform, vid, **kw):
 
 
 def _date_fields(info):
-    """publishedAt/precision from a yt-dlp info dict."""
+    """publishedAt/precision from a yt-dlp info dict.
+
+    A YouTube search or channel listing only says "3 days ago"; yt-dlp turns
+    that into a timestamp, which is marked "approx" so it is never mistaken
+    for the exact time a video page gives.
+    """
+    flat_youtube = info.get("_type") == "url" and (info.get("ie_key") or "").lower().startswith("youtube")
     for key in ("timestamp", "release_timestamp"):
         if info.get(key):
-            return _iso(info[key]), "datetime"
+            return _iso(info[key]), "approx" if flat_youtube else "datetime"
     d = info.get("upload_date") or info.get("release_date")
     if d and re.fullmatch(r"\d{8}", d):
         return f"{d[:4]}-{d[4:6]}-{d[6:]}", "date"
@@ -94,6 +100,7 @@ def from_ytdlp(info):
         thumbnail=thumb,
         viewCount=info.get("view_count"),
         liveStatus=info.get("live_status"),
+        uploaderVerified=True if info.get("channel_is_verified") else None,
         audio={"effectiveKbps": eff, "codec": codec, "kbps": raw} if eff else None,
         description=(info.get("description") or "")[:2000],
     )
@@ -103,12 +110,23 @@ def from_ytdlp(info):
 # yt-dlp
 # ---------------------------------------------------------------------------
 
+class _Quiet:
+    """yt-dlp prints errors even when quiet; they reach us as exceptions anyway."""
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+
+
 def _ydl_opts(**extra):
     opts = {
+        "logger": _Quiet(),
         "quiet": True, "no_warnings": True, "skip_download": True,
         "socket_timeout": 20, "retries": 3, "extractor_retries": 2,
         "noplaylist": True, "ignoreerrors": False,
         "cachedir": str(Path(tempfile.gettempdir()) / "set-tracker-ytdlp"),
+        # "3 days ago" in YouTube listings becomes an approximate timestamp.
+        "extractor_args": {"youtubetab": {"approximate_date": [""]}},
     }
     cookies = os.environ.get("YTDLP_COOKIES_FILE")
     if cookies and Path(cookies).is_file():
@@ -144,12 +162,18 @@ def _short_error(e):
 
 
 def youtube_search_url(query):
-    """YouTube's own results page, sorted by upload date (sp=CAI%3D)."""
-    return "https://www.youtube.com/results?" + urllib.parse.urlencode({"search_query": query}) + "&sp=CAI%253D"
+    """YouTube's own results page: videos only, newest first (sp=CAISAhAB)."""
+    return "https://www.youtube.com/results?" + urllib.parse.urlencode({"search_query": query}) + "&sp=CAISAhAB"
+
+
+def _is_video(entry):
+    """Search pages also list channels, playlists and "Mix" radios; keep videos."""
+    kind = (entry.get("ie_key") or "Youtube").lower()
+    return kind == "youtube" and re.fullmatch(r"[\w-]{11}", str(entry.get("id") or "")) is not None
 
 
 def youtube_search_ytdlp(query, limit):
-    return [from_ytdlp(e) for e in _flat_list(youtube_search_url(query), limit)]
+    return [from_ytdlp(e) for e in _flat_list(youtube_search_url(query), limit) if _is_video(e)]
 
 
 def youtube_channel_ytdlp(channel, limit):
@@ -157,7 +181,7 @@ def youtube_channel_ytdlp(channel, limit):
     url = url.rstrip("/")
     if not re.search(r"/(videos|streams|playlist)", url) and "playlist?list=" not in url:
         url += "/videos"
-    return [from_ytdlp(e) for e in _flat_list(url, limit)]
+    return [from_ytdlp(e) for e in _flat_list(url, limit) if _is_video(e)]
 
 
 def soundcloud_search(query, limit):
@@ -222,29 +246,23 @@ def enrich(item):
     return merged
 
 
-def excerpts(item, starts, seconds, workdir):
-    """Download short audio excerpts; returns the files that arrived."""
-    yt_dlp = _ydl()
-    from yt_dlp.utils import download_range_func
+def audio_stream(item):
+    """Address and request headers of the best audio stream of an upload.
 
-    files = []
-    for i, start in enumerate(starts):
-        out = Path(workdir) / f"part{i}.%(ext)s"
-        opts = _ydl_opts(
-            skip_download=False,
-            format="bestaudio/best",
-            outtmpl=str(out),
-            download_ranges=download_range_func([], [(start, start + seconds)]),
-            force_keyframes_at_cuts=False,
-            noprogress=True,
-        )
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([item["url"]])
-        except Exception as e:
-            raise SourceError(_short_error(e)) from e
-        files += [p for p in Path(workdir).glob(f"part{i}.*") if p.suffix != ".part"]
-    return files
+    ffmpeg then reads just the excerpts it needs straight from there, which
+    works for plain files and for HLS playlists alike (SoundCloud serves
+    HLS; a section download through yt-dlp left files ffmpeg could not read).
+    """
+    yt_dlp = _ydl()
+    try:
+        with yt_dlp.YoutubeDL(_ydl_opts(format="bestaudio/best")) as ydl:
+            info = ydl.extract_info(item["url"], download=False)
+    except Exception as e:
+        raise SourceError(_short_error(e)) from e
+    chosen = info if info.get("url") else next(iter(info.get("requested_formats") or []), {})
+    if not chosen.get("url"):
+        raise SourceError("ingen lydstrøm fundet")
+    return chosen["url"], chosen.get("http_headers") or {}, chosen.get("protocol") or ""
 
 
 # ---------------------------------------------------------------------------

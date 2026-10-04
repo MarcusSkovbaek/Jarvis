@@ -167,7 +167,8 @@
     var d = parseDate(iso, precision);
     if (!d) return "ukendt tidspunkt";
     var now = new Date();
-    if (precision === "date") {
+    // "date" has no time, and "approx" ("3 days ago" on YouTube) is only good to the day.
+    if (precision === "date" || precision === "approx") {
       var dd = dayDiff(d, now);
       if (dd === 0) return "i dag";
       if (dd === 1) return "i går";
@@ -626,7 +627,11 @@
       el("div", { class: "set__facts" },
         isNew ? el("span", { class: "tag tag--new", text: "Ny" }) : null,
         it.example ? el("span", { class: "tag tag--example", text: "Eksempel" }) : null,
-        el("span", { class: "fact", title: published ? fmtFull.format(published) : null, text: prefix + when(it.publishedAt, it.publishedPrecision) }),
+        el("span", {
+          class: "fact",
+          title: published ? (/^(date|approx)$/.test(it.publishedPrecision || "") ? fmtDayYear : fmtFull).format(published) : null,
+          text: prefix + when(it.publishedAt, it.publishedPrecision)
+        }),
         // The artwork clock shows the length; this copy is for screen readers.
         it.durationSec ? el("span", { class: "sr-only", text: "Længde " + length(it.durationSec) }) : null));
 
