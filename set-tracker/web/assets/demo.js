@@ -20,7 +20,7 @@ window.SET_TRACKER_DEMO_DATA = function (now) {
       id: "yousuke-yukimatsu",
       name: "Yousuke Yukimatsu",
       displayName: "¥ØU$UK€ ¥UK1MAT$U",
-      subtitle: "Yousuke Yukimatsu · 行松陽介 · Osaka",
+      subtitle: "Yousuke Yukimatsu · 行松陽介",
       trackingSince: "2026-10-04T17:50:00Z",
       links: { soundcloud: sc, youtube: yt, residentAdvisor: "https://ra.co/dj/yosukeyukimatsu-jp" }
     }],

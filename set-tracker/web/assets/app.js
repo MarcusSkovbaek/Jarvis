@@ -149,8 +149,9 @@
   var fmtFull = new Intl.DateTimeFormat("da-DK", { dateStyle: "long", timeStyle: "short" });
 
   function parseDate(iso, precision) {
-    if (!iso) return null;
-    var d = precision === "date" || iso.length === 10 ? new Date(iso + "T12:00:00") : new Date(iso);
+    if (!iso || typeof iso !== "string") return null;
+    // A date without a time means that calendar day; noon keeps it there in every time zone.
+    var d = precision === "date" || iso.length === 10 ? new Date(iso.slice(0, 10) + "T12:00:00") : new Date(iso);
     return isNaN(d) ? null : d;
   }
   function startOfDay(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
@@ -202,7 +203,7 @@
     if (!h) return mins + " min";
     return m ? h + " t " + m + " min" : h + " t";
   }
-  function decimal(n, digits) { return Number(n).toFixed(digits).replace(".", ","); }
+  function decimal(n, digits) { return Number(n).toFixed(digits).replace(".", ",").replace(/^-/, "\u2212"); }
 
   /* --------------------------------------------------------------- data */
 

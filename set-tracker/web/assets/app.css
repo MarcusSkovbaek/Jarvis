@@ -863,18 +863,23 @@ a { color: inherit; }
   background: var(--panel);
 }
 .crate > summary {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 4px 12px;
+  gap: 2px 12px;
   padding: 14px 16px;
   cursor: pointer;
   list-style: none;
 }
 .crate > summary::-webkit-details-marker { display: none; }
 .crate__title { font-weight: 600; }
-.crate__hint { color: var(--ink-3); font-size: var(--step--1); }
-.crate > summary .icon { margin-left: auto; color: var(--ink-3); transition: transform 0.2s; }
+.crate__hint { grid-column: 1; color: var(--ink-3); font-size: var(--step--1); }
+.crate > summary .icon { grid-column: 2; grid-row: 1 / span 2; color: var(--ink-3); transition: transform 0.2s; }
+@media (min-width: 720px) {
+  .crate > summary { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .crate__hint { grid-column: 2; }
+  .crate > summary .icon { grid-column: 3; grid-row: 1; }
+}
 .crate[open] > summary .icon { transform: rotate(180deg); }
 .crate__list { display: grid; margin: 0; padding: 0 16px 6px; list-style: none; }
 .reject {

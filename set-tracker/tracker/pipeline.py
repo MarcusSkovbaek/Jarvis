@@ -438,6 +438,53 @@ def write_outputs(data, state, data_path, js_path, state_path):
     write_json(state_path, state)
 
 
+def probe(config, urls):
+    """Judge given uploads end to end (metadata, excerpts, score) without touching data.
+
+    A health check for the parts a scan only reaches when something new turns
+    up: run it in GitHub Actions on a known set to see that downloads and the
+    sound analysis still work from there.
+    """
+    fetcher = Fetcher(youtube_api_key=os.environ.get("YOUTUBE_API_KEY") or None)
+    artist = config["artists"][0]
+    scanner = Scanner(config, {}, {}, fetcher)
+    lines = ["## Sætradar probe", ""]
+    failed = 0
+    for url in urls:
+        platform = "soundcloud" if "soundcloud.com" in url else "youtube"
+        item = sources._item(platform, url, url=url)
+        try:
+            item = fetcher.enrich(item)
+        except SourceError as e:
+            failed += 1
+            lines += [f"### {url}", f"- metadata: **fejl** – {e}", ""]
+            print(f"{url}\n  metadata FAILED: {e}")
+            continue
+        item["artistId"] = artist["id"]
+        scanner.evaluate(item, artist)
+        q = item.get("quality") or {}
+        verdict = item["status"]
+        a = q.get("analysis")
+        lines += [f"### [{item.get('title')}]({url})",
+                  f"- uploader: {item.get('uploader')} · udgivet {item.get('publishedAt')} ({item.get('publishedPrecision')})"
+                  f" · længde {item.get('durationSec')} s",
+                  f"- lyd-bitrate: {item.get('audio')}",
+                  f"- lydanalyse: {a if a else 'fejl – ' + str(q.get('analysisError'))}",
+                  f"- score: **{q.get('score')}** ({q.get('label')}) → {verdict}",
+                  *[f"  - {s['impact']:+d} {s['text']}" for s in q.get("signals", [])],
+                  ""]
+        print(f"{url}\n  {item.get('title')!r} by {item.get('uploader')!r}, {item.get('durationSec')} s, "
+              f"published {item.get('publishedAt')}\n  audio {item.get('audio')}\n  analysis {a or q.get('analysisError')}\n"
+              f"  score {q.get('score')} -> {verdict}")
+        if not a:
+            failed += 1
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    return 1 if failed else 0
+
+
 def step_summary(output):
     """Markdown for the GitHub Actions run page."""
     lines = ["## Sætradar", ""]
@@ -483,6 +530,8 @@ def main(argv=None):
     parser.add_argument("--no-analysis", action="store_true", help="skip the audio excerpts")
     parser.add_argument("--placeholder", action="store_true",
                         help="write empty data for the configured artists without scanning")
+    parser.add_argument("--probe", nargs="+", metavar="URL",
+                        help="fetch and judge these uploads and print the verdict; writes nothing")
     args = parser.parse_args(argv)
     data_dir = Path(args.data_dir)
     data_path, js_path, state_path = data_dir / "sets.json", data_dir / "sets.js", data_dir / "seen.json"
@@ -497,6 +546,9 @@ def main(argv=None):
         return 2
     if args.no_analysis:
         config.setdefault("settings", {})["audioAnalysis"] = False
+
+    if args.probe:
+        return probe(config, args.probe)
 
     if args.placeholder:
         output = Scanner(config, {}, {}, fetcher=None, log=lambda *a: None).output()

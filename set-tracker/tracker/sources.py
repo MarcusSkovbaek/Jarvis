@@ -125,14 +125,16 @@ def _ydl():
     return yt_dlp
 
 
-def _flat_list(url):
+def _flat_list(url, limit):
+    """Entries of a search, channel or profile page, without opening each one."""
     yt_dlp = _ydl()
     try:
-        with yt_dlp.YoutubeDL(_ydl_opts(extract_flat="in_playlist")) as ydl:
+        # playlistend stops paging once enough entries are in; search pages never end.
+        with yt_dlp.YoutubeDL(_ydl_opts(extract_flat="in_playlist", playlistend=limit)) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
         raise SourceError(_short_error(e)) from e
-    return [e for e in (info or {}).get("entries") or [] if e]
+    return [e for e in (info or {}).get("entries") or [] if e][:limit]
 
 
 def _short_error(e):
@@ -141,8 +143,13 @@ def _short_error(e):
     return text.splitlines()[0][:240] if text else type(e).__name__
 
 
+def youtube_search_url(query):
+    """YouTube's own results page, sorted by upload date (sp=CAI%3D)."""
+    return "https://www.youtube.com/results?" + urllib.parse.urlencode({"search_query": query}) + "&sp=CAI%253D"
+
+
 def youtube_search_ytdlp(query, limit):
-    return [from_ytdlp(e) for e in _flat_list(f"ytsearchdate{limit}:{query}")]
+    return [from_ytdlp(e) for e in _flat_list(youtube_search_url(query), limit)]
 
 
 def youtube_channel_ytdlp(channel, limit):
@@ -150,7 +157,7 @@ def youtube_channel_ytdlp(channel, limit):
     url = url.rstrip("/")
     if not re.search(r"/(videos|streams|playlist)", url) and "playlist?list=" not in url:
         url += "/videos"
-    return [from_ytdlp(e) for e in _flat_list(url)[:limit]]
+    return [from_ytdlp(e) for e in _flat_list(url, limit)]
 
 
 def soundcloud_search(query, limit):
@@ -166,7 +173,7 @@ def soundcloud_search(query, limit):
         results += _soundcloud_recent(query, limit)
     except Exception:
         pass
-    results += [from_ytdlp(e) for e in _flat_list(f"scsearch{limit}:{query}")]
+    results += [from_ytdlp(e) for e in _flat_list(f"scsearch{limit}:{query}", limit)]
     out = []
     for it in results:
         if it["id"] not in seen:
@@ -192,7 +199,7 @@ def soundcloud_user(user, limit):
     url = url.rstrip("/")
     if not url.endswith("/tracks"):
         url += "/tracks"
-    return [from_ytdlp(e) for e in _flat_list(url)[:limit]]
+    return [from_ytdlp(e) for e in _flat_list(url, limit)]
 
 
 def enrich(item):
