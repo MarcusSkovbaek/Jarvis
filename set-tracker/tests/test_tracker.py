@@ -142,6 +142,15 @@ class Matching(unittest.TestCase):
         self.assertNotIn("phone", codes("Yukimatsu at Phonox"))
         self.assertNotIn("partial", codes("Yukimatsu – Eclipse Festival"))
 
+    def test_titles_that_name_him_but_are_not_his_sets(self):
+        codes = lambda t: {s["code"] for s in matching.title_signals(t)}  # noqa: E731
+        self.assertIn("support", codes("Dune B2B Selina Eshraghi at The Concourse Project | Opening for Yousuke Yukimatsu"))
+        self.assertIn("support", codes("Warm up for ¥ØU$UK€ ¥UK1MAT$U @ Circus"))
+        self.assertIn("reaction", codes("REACCION A LA SESSION YOUSUKE YUKIMATSU EN BOILER ROOM"))
+        self.assertIn("reaction", codes("Producer reacts to Yousuke Yukimatsu Boiler Room"))
+        self.assertNotIn("support", codes("¥ØU$UK€ ¥UK1MAT$U | Boiler Room: Tokyo"))
+        self.assertNotIn("reaction", codes("¥ØU$UK€ ¥UK1MAT$U b2b someone (Full Set)"))
+
     def test_trusted_uploader(self):
         trusted = CONFIG["trustedUploaders"]
         self.assertTrue(matching.is_trusted_uploader("Boiler Room", trusted))
