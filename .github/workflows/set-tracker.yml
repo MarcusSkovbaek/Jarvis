@@ -142,4 +142,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
+        # Until Pages is switched on this fails on every run; a warning says so
+        # without a failure e-mail every two hours.
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+      - name: Explain a missing Pages site
+        if: steps.deployment.outcome == 'failure'
+        run: echo "::warning::Siden blev ikke udgivet. Slå GitHub Pages til under Settings → Pages → Source → GitHub Actions."
