@@ -109,6 +109,30 @@
       "links": {
         "youtube": "https://www.youtube.com/results?search_query=WORSHIP&sp=CAI%253D"
       }
+    },
+    {
+      "id": "sub-focus",
+      "aliases": [],
+      "name": "Sub Focus",
+      "displayName": "SUB FOCUS",
+      "subtitle": "Sub Focus",
+      "trackingSince": "2026-10-01T18:53:00Z",
+      "searchNames": [
+        "Sub Focus"
+      ],
+      "sources": {
+        "youtube": {
+          "searchQueries": [],
+          "channels": []
+        },
+        "soundcloud": {
+          "searchQueries": [],
+          "users": []
+        }
+      },
+      "links": {
+        "youtube": "https://www.youtube.com/results?search_query=Sub+Focus&sp=CAI%253D"
+      }
     }
   ]
 }
