@@ -10,12 +10,39 @@
     "rejectedKeepDays": 120
   },
   "trustedUploaders": [
-    "boiler room", "rinse", "nts", "hor berlin", "hoer berlin", "lot radio",
-    "dekmantel", "rainbow disco club", "dommune", "resident advisor", "mixmag",
-    "dj mag", "cercle", "kiosk radio", "red bull music", "xlr8r", "dublab",
-    "unsound", "sonar", "mutek", "bassiani", "tresor", "fabric", "keep hush",
-    "be at tv", "worldwide fm", "refuge worldwide", "noods radio", "veneno",
-    "lyl radio", "intergalactic fm", "palms trax", "zone unknown"
+    "boiler room",
+    "rinse",
+    "nts",
+    "hor berlin",
+    "hoer berlin",
+    "lot radio",
+    "dekmantel",
+    "rainbow disco club",
+    "dommune",
+    "resident advisor",
+    "mixmag",
+    "dj mag",
+    "cercle",
+    "kiosk radio",
+    "red bull music",
+    "xlr8r",
+    "dublab",
+    "unsound",
+    "sonar",
+    "mutek",
+    "bassiani",
+    "tresor",
+    "fabric",
+    "keep hush",
+    "be at tv",
+    "worldwide fm",
+    "refuge worldwide",
+    "noods radio",
+    "veneno",
+    "lyl radio",
+    "intergalactic fm",
+    "palms trax",
+    "zone unknown"
   ],
   "artists": [
     {
@@ -31,7 +58,12 @@
         "Yosuke Yukimatsu",
         "行松陽介"
       ],
-      "aliases": ["yukimatsu", "行松陽介", "行松 陽介", "ユキマツ"],
+      "aliases": [
+        "yukimatsu",
+        "行松陽介",
+        "行松 陽介",
+        "ユキマツ"
+      ],
       "links": {
         "soundcloud": "https://soundcloud.com/yousukeyukimatsu",
         "youtube": "https://www.youtube.com/results?search_query=Yousuke+Yukimatsu&sp=CAI%253D",
@@ -39,13 +71,43 @@
       },
       "sources": {
         "youtube": {
-          "searchQueries": ["Yousuke Yukimatsu DJ set"],
+          "searchQueries": [
+            "Yousuke Yukimatsu DJ set"
+          ],
           "channels": []
         },
         "soundcloud": {
-          "searchQueries": ["yukimatsu"],
-          "users": ["yousukeyukimatsu"]
+          "searchQueries": [
+            "yukimatsu"
+          ],
+          "users": [
+            "yousukeyukimatsu"
+          ]
         }
+      }
+    },
+    {
+      "id": "worship",
+      "aliases": [],
+      "name": "WORSHIP",
+      "displayName": "WORSHIP",
+      "subtitle": "",
+      "trackingSince": "2026-10-01T18:50:00Z",
+      "searchNames": [
+        "WORSHIP"
+      ],
+      "sources": {
+        "youtube": {
+          "searchQueries": [],
+          "channels": []
+        },
+        "soundcloud": {
+          "searchQueries": [],
+          "users": []
+        }
+      },
+      "links": {
+        "youtube": "https://www.youtube.com/results?search_query=WORSHIP&sp=CAI%253D"
       }
     }
   ]
