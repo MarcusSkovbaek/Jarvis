@@ -13,6 +13,23 @@
 import { chromium } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// A fixed copy of the config: the real one changes when artists are edited in the app.
+const FIXTURE = JSON.parse(fs.readFileSync(path.join(HERE, "fixtures", "artists.json"), "utf8"));
+function firstRunData() {
+  return {
+    version: 1, generatedAt: null, scanOk: true,
+    settings: { minDurationMinutes: 30, minQualityScore: 60, qualityBase: 62, scanIntervalHours: 2 },
+    artists: FIXTURE.artists.map((a) => ({
+      id: a.id, name: a.name, displayName: a.displayName || a.name, subtitle: a.subtitle || "",
+      searchNames: a.searchNames, trackingSince: new Date(a.trackingSince).toISOString().replace(/\.\d+Z$/, "Z"),
+      links: a.links || {}, profiles: { soundcloud: a.sources.soundcloud.users || [], youtube: a.sources.youtube.channels || [] },
+    })),
+    problems: [], health: [], items: [],
+  };
+}
 
 const BASE = process.env.BASE || "http://127.0.0.1:8766/";
 const SHOTS = process.env.SHOTS || "ui-shots";
@@ -251,7 +268,9 @@ for (const [devName, device] of [["iphone", IPHONE], ["edge", EDGE]]) {
   for (const scheme of ["dark", "light"]) {
     const tag = `empty ${devName} ${scheme}`;
     console.log(`\n${tag}`);
-    const { page, context, errors } = await open(device, scheme, BASE);
+    const { page, context, errors } = await open(device, scheme, BASE, async (p) => {
+      await p.route("**/data/sets.json*", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(firstRunData()) }));
+    });
     check(`${tag}: empty state explains what will appear`, await page.locator(".empty h2").innerText() === "Ingen nye sæt endnu");
     check(`${tag}: the artist name breaks only between words`, await page.$$eval(".plate__name", (ns) => ns.every((n) => {
       const r = document.createRange(); r.selectNodeContents(n);
@@ -261,6 +280,13 @@ for (const [devName, device] of [["iphone", IPHONE], ["edge", EDGE]]) {
     const spellings = await page.$$eval(".spellings__list li", (ns) => ns.map((n) => n.textContent));
     check(`${tag}: shows that both the plain and the stylised name are searched`,
       spellings.includes("Yousuke Yukimatsu") && spellings.includes("¥ØU$UK€ ¥UK1MAT$U"), spellings.join(" | "));
+    const bar = await page.evaluate(() => {
+      const full = document.getElementById("scan-text"), short = document.getElementById("scan-short");
+      const shown = getComputedStyle(full).display !== "none" ? full : short;
+      return { cut: shown.scrollWidth > shown.clientWidth + 1, label: document.getElementById("scan").getAttribute("aria-label") };
+    });
+    check(`${tag}: the top bar status is not cut off`, !bar.cut);
+    check(`${tag}: the status keeps its full wording for screen readers`, /tjekket|Ikke tjekket|Tjek/i.test(bar.label || ""), bar.label);
     check(`${tag}: status says first scan is pending or done`, /Ikke tjekket|Tjekket|Sidste/.test(await page.locator("#scan-text").innerText()));
     await commonChecks(tag, page, errors);
     await shot(page, `empty-${devName}-${scheme}`);
@@ -395,7 +421,9 @@ for (const [devName, device] of [["iphone-se", IPHONE_SE], ["iphone", IPHONE], [
   await page.route("**/raw.githubusercontent.com/**", (r) => r.abort());
   await page.goto(file, { waitUntil: "load" });
   await page.waitForTimeout(1200);
-  check("opened from disk, data still loads via sets.js", await page.locator(".plate__name").first().innerText() === "¥ØU$UK€ ¥UK1MAT$U");
+  const onDisk = JSON.parse(fs.readFileSync(path.join(process.env.WEB_DIR || "web", "data", "sets.json"), "utf8"));
+  const expected = onDisk.artists.length ? (onDisk.artists[0].displayName || onDisk.artists[0].name) : "Ingen kunstnere";
+  check("opened from disk, data still loads via sets.js", (await page.locator(".plate__name").first().innerText()) === expected);
   check("no script errors from disk", errors.length === 0, errors.join(" | "));
   await context.close();
 }

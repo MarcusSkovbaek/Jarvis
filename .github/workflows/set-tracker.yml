@@ -1,6 +1,10 @@
 # Sætradar: scans YouTube and SoundCloud every two hours, keeps the results on
 # the set-tracker-data branch, and publishes set-tracker/web to GitHub Pages.
 # One-time setup: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+#
+# The page is only published after the browser self-checks pass; if they fail,
+# the version already online stays up. Changing artists in the app commits
+# config/artists.json, which is a push and so starts a scan right away.
 name: Sætradar
 
 on:
@@ -49,14 +53,46 @@ jobs:
           cache: pip
           cache-dependency-path: set-tracker/requirements.txt
 
-      - name: Install yt-dlp, numpy and ffmpeg
+      - name: Install yt-dlp and numpy
+        timeout-minutes: 8
+        run: pip install --upgrade -r set-tracker/requirements.txt
+
+      - name: Install ffmpeg
+        # Ubuntu's package mirrors sometimes hang (once for 40 minutes). Without
+        # ffmpeg the scan still runs; it only cannot measure the sound.
+        timeout-minutes: 5
+        continue-on-error: true
         run: |
-          pip install --upgrade -r set-tracker/requirements.txt
-          command -v ffmpeg || (sudo apt-get update -q && sudo apt-get install -y -q ffmpeg)
+          command -v ffmpeg && exit 0
+          sudo timeout 150 apt-get update -q -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+          sudo timeout 150 apt-get install -y -q --no-install-recommends ffmpeg
 
       - name: Self-test
+        timeout-minutes: 5
         working-directory: set-tracker
         run: python -m unittest discover -s tests
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-1.56.1-chromium
+
+      - name: Browser self-check
+        # The page as it would be published: iPhone and desktop sizes, both
+        # themes, and the "Overvågninger" sheet against a stand-in for GitHub.
+        id: browser
+        timeout-minutes: 15
+        continue-on-error: true
+        working-directory: set-tracker
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.56.1
+          npx playwright install chromium
+          python -m http.server 8766 --directory web > /dev/null 2>&1 &
+          sleep 1
+          export SHOTS="$RUNNER_TEMP/ui-shots" WEB_DIR=web
+          # One retry, for a runner that is slow to start the browser.
+          node tests/ui_check.mjs || node tests/ui_check.mjs
+          node tests/ui_admin.mjs || node tests/ui_admin.mjs
 
       - name: Probe
         if: github.event_name == 'workflow_dispatch' && inputs.probe != ''
@@ -108,6 +144,7 @@ jobs:
 
       - name: Build the site
         id: build
+        if: steps.browser.outcome == 'success'
         run: |
           rm -rf _site
           cp -r set-tracker/web _site
@@ -116,6 +153,7 @@ jobs:
           echo "built=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-pages-artifact@v4
+        if: steps.browser.outcome == 'success'
         with:
           path: _site
 
@@ -126,6 +164,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/set-tracker.yml/enable"
+
+      - name: Report a failed browser check
+        if: steps.browser.outcome != 'success'
+        run: |
+          echo "::error::The browser self-check failed, so the page was not published. The version already online stays up; the scan's data is saved."
+          exit 1
 
       - name: Report a failed scan
         if: steps.scan.outcome == 'failure'

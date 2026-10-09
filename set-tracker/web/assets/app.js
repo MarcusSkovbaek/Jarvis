@@ -61,6 +61,7 @@
     loading: false,
     error: null,
     loadedAt: 0,
+    activity: null,      // set by admin.js while it follows a scan on GitHub
     keep: new Set(),     // toggled while looking at a filter: stay put until the filter changes
     open: new Set(),     // expanded quality panels
     undo: null,
@@ -100,7 +101,12 @@
     youtube: ["M21.6 7.2a2.6 2.6 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4a2.6 2.6 0 0 0-1.8 1.8C2 8.8 2 12 2 12s0 3.2.4 4.8a2.6 2.6 0 0 0 1.8 1.8c1.6.4 7.8.4 7.8.4s6.2 0 7.8-.4a2.6 2.6 0 0 0 1.8-1.8c.4-1.6.4-4.8.4-4.8s0-3.2-.4-4.8ZM10 15.2V8.8l5.4 3.2L10 15.2Z"],
     soundcloud: ["M11 8.2c.9-.7 2-1.2 3.3-1.2a5.2 5.2 0 0 1 5.1 4.2A2.9 2.9 0 0 1 22 14.1 2.9 2.9 0 0 1 19.1 17H11V8.2Z",
       "M2 13.2h1.2V17H2zM4.2 11.6h1.2V17H4.2zM6.4 10.2h1.2V17H6.4zM8.6 9h1.2v8H8.6z"],
-    live: ["M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0", "M7.1 7.1a7 7 0 0 0 0 9.8", "M16.9 7.1a7 7 0 0 1 0 9.8"]
+    live: ["M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0", "M7.1 7.1a7 7 0 0 0 0 9.8", "M16.9 7.1a7 7 0 0 1 0 9.8"],
+    edit: ["M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3", "M13.5 6.5l3 3"],
+    plus: ["M12 5v14", "M5 12h14"],
+    close: ["M6 6l12 12", "M18 6L6 18"],
+    back: ["M15 18l-6-6 6-6"],
+    sliders: ["M4 7h10", "M18 7h2", "M4 17h4", "M12 17h8", "M16 5v4", "M10 15v4"]
   };
   var FILLED = { youtube: true, soundcloud: true };
 
@@ -302,7 +308,7 @@
     var b = $("#refresh");
     b.setAttribute("aria-busy", on ? "true" : "false");
     b.disabled = on;
-    if (on && !S.data) { $("#scan-led").dataset.state = "busy"; $("#scan-text").textContent = "Henter sæt …"; }
+    if (on && !S.data) { $("#scan-led").dataset.state = "busy"; $("#scan-text").textContent = "Henter sæt …"; $("#scan-short").textContent = "Henter"; }
   }
 
   /* ----------------------------------------------------------- selection */
@@ -335,27 +341,31 @@
     renderFooter();
   }
 
+  // [LED state, text, short text for narrow top bars]
   function statusInfo() {
-    if (!S.data) return S.error ? ["bad", "Ingen forbindelse"] : ["busy", "Henter sæt …"];
-    if (S.from === "demo") return ["warn", "Eksempeldata"];
+    if (S.activity) return ["busy", S.activity, "Scanner"];
+    if (!S.data) return S.error ? ["bad", "Ingen forbindelse", "Offline"] : ["busy", "Henter sæt …", "Henter"];
+    if (S.from === "demo") return ["warn", "Eksempeldata", "Eksempel"];
     var d = S.data;
     var at = parseDate(d.generatedAt);
-    if (!at) return ["idle", "Ikke tjekket endnu"];
+    if (!at) return ["idle", "Ikke tjekket endnu", "Venter"];
     var health = d.health || [];
     var failed = health.filter(function (h) { return !h.ok; }).length;
     var interval = (d.settings && d.settings.scanIntervalHours) || 2;
     var age = Date.now() - at;
     var suffix = S.from === "cache" ? " · offline" : "";
-    if (health.length && failed === health.length) return ["bad", "Tjek fejlede" + suffix];
-    if (age > (interval * 2 + 1) * HOUR) return ["warn", "Sidste tjek " + compactWhen(at) + suffix];
-    if (failed) return ["warn", compactWhen(at) + " · " + failed + " fejl" + suffix];
-    return ["ok", "Tjekket " + compactWhen(at) + suffix];
+    if (health.length && failed === health.length) return ["bad", "Tjek fejlede" + suffix, "Fejl"];
+    if (age > (interval * 2 + 1) * HOUR) return ["warn", "Sidste tjek " + compactWhen(at) + suffix, compactWhen(at)];
+    if (failed) return ["warn", compactWhen(at) + " · " + failed + " fejl" + suffix, compactWhen(at)];
+    return ["ok", "Tjekket " + compactWhen(at) + suffix, compactWhen(at)];
   }
 
   function renderStatus() {
     var info = statusInfo();
     $("#scan-led").dataset.state = info[0];
     $("#scan-text").textContent = info[1];
+    $("#scan-short").textContent = info[2] || info[1];
+    $("#scan").setAttribute("aria-label", info[1] + ". Se kilderne nederst.");
     var at = S.data && parseDate(S.data.generatedAt);
     $("#scan").title = at && S.from !== "demo" ? "Seneste tjek " + fmtFull.format(at) + ". Se kilderne nederst." : info[1];
     var eyebrowLed = $("#plate .led");
@@ -373,13 +383,27 @@
         append(box, el("a", { href: safeUrl(window.SET_TRACKER_SITE), target: "_blank", rel: "noopener noreferrer", text: "Åbn den rigtige Sætradar" }));
       }
       box.hidden = false;
+    } else if (S.data && (S.data.problems || []).length) {
+      append(box, el("span", null, el("strong", { text: "En overvågning kunne ikke scannes. " }),
+        S.data.problems.join(" · ")));
+      append(box, el("button", { class: "linklike", type: "button", "data-manage": "list", text: "Se overvågninger" }));
+      box.hidden = false;
     } else if (S.from === "cache" && S.data && S.data.generatedAt) {
       append(box, el("span", { text: "Ingen forbindelse. Viser den seneste gemte kopi fra " +
         fmtFull.format(new Date(S.data.generatedAt)) + "." }));
       box.hidden = false;
+    } else if (backlog()) {
+      // A start date moved far back: the scan ran out of time and goes on next time.
+      append(box, el("span", null, el("strong", { text: "Søger stadig længere tilbage. " }),
+        (backlog() === 1 ? "1 fundet upload vurderes" : backlog() + " fundne uploads vurderes") + " ved næste scanning."));
+      box.hidden = false;
     } else {
       box.hidden = true;
     }
+  }
+
+  function backlog() {
+    return ((S.data && S.data.artists) || []).reduce(function (n, a) { return n + (a.backlog || 0); }, 0);
   }
 
   function renderFailure() {
@@ -401,6 +425,14 @@
     plate.textContent = "";
     plate.classList.toggle("plate--many", many);
     var info = statusInfo();
+    if (!shown.length) {
+      append(plate, el("span", { class: "label plate__eyebrow" }, el("span", { class: "led", "data-state": "idle" }), "Overvåger"));
+      append(plate, el("h1", { class: "plate__names" }, el("span", { class: "plate__name", text: "Ingen kunstnere" })));
+      append(plate, el("p", { class: "plate__sub", text: "Tilføj en kunstner, så holder Sætradaren øje med nye sæt." }));
+      append(plate, el("div", { class: "plate__links" },
+        el("button", { class: "btn btn--play", type: "button", "data-manage": "add", text: "Tilføj overvågning" })));
+      return;
+    }
     append(plate, el("span", { class: "label plate__eyebrow" }, el("span", { class: "led", "data-state": info[0] }),
       many ? "Overvåger " + shown.length + " kunstnere" : "Overvåger"));
 
@@ -424,11 +456,11 @@
     }
 
     if (!many && shown[0] && (shown[0].searchNames || []).length) {
-      var names = el("ul", { class: "spellings__list" });
+      var spellList = el("ul", { class: "spellings__list" });
       shown[0].searchNames.forEach(function (n) {
-        append(names, el("li", { lang: hasCJK(n) ? "ja" : null, text: n }));
+        append(spellList, el("li", { lang: hasCJK(n) ? "ja" : null, text: n }));
       });
-      append(plate, el("div", { class: "spellings" }, el("span", { class: "label", text: "Søger efter" }), names));
+      append(plate, el("div", { class: "spellings" }, el("span", { class: "label", text: "Søger efter" }), spellList));
     }
 
     var s = S.data.settings || {};
@@ -439,8 +471,13 @@
       var d = new Date(starts[0]);
       startText = fmtDayYear.format(d) + ", kl. " + fmtTime.format(d);
     }
+    // The start date is also the way to change it.
+    var startChip = el("button", {
+      class: "criteria__edit", type: "button", "data-manage": many ? "list" : "start:" + shown[0].id,
+      title: "Ret startdatoen", "aria-label": "Udgivet efter " + startText + ". Ret startdatoen"
+    }, el("b", { text: "Udgivet efter" }), startText, icon("edit", "icon--s"));
     append(plate, el("ul", { class: "criteria", "aria-label": "Krav" },
-      el("li", null, el("b", { text: "Udgivet efter" }), startText),
+      el("li", { class: "criteria__start" }, startChip),
       el("li", null, el("b", { text: "Længde" }), "over " + (s.minDurationMinutes || 30) + " min"),
       el("li", null, el("b", { text: "Lyd" }), "mindst " + (s.minQualityScore || 60) + "/100")));
   }
@@ -507,6 +544,12 @@
     var f = prefs.filter;
     var box = el("div", { class: "empty" });
     var allAccepted = S.data.items.filter(function (it) { return it.status === "accepted"; });
+    if (!S.data.artists.length) {
+      append(box, el("h2", { text: "Intet at holde øje med" }));
+      append(box, el("p", { text: "Der er ingen overvågninger. Tilføj en kunstner, og de næste sæt dukker op her." }));
+      append(box, el("button", { class: "btn btn--quiet", type: "button", "data-manage": "add", text: "Tilføj overvågning" }));
+      return box;
+    }
     if (!allAccepted.length) {
       var a = S.data.artists.length === 1 ? S.data.artists[0] : null;
       var since = a ? new Date(a.trackingSince) : null;
@@ -914,6 +957,16 @@
     if ((location.hash === "#demo") !== DEMO) location.reload();
   });
 
-  window.SetTracker = { reload: function () { return load(false); }, state: S, prefs: prefs };
+  window.SetTracker = {
+    reload: function () { return load(false); },
+    state: S,
+    prefs: prefs,
+    demo: DEMO,
+    render: render,
+    toast: toast,
+    setActivity: function (text) { S.activity = text || null; if (S.data) render(); else renderStatus(); },
+    ui: { el: el, append: append, icon: icon, safeUrl: safeUrl, hasCJK: hasCJK, when: when,
+          fmtDayYear: fmtDayYear, fmtTime: fmtTime, fmtFull: fmtFull, parseDate: parseDate }
+  };
   load(false);
 })();

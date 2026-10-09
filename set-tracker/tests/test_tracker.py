@@ -16,6 +16,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+# A fixed copy of the config: the real one changes whenever artists are
+# edited in the app, and tests must not break (and stop the scans) then.
+FIXTURE_CONFIG = Path(__file__).resolve().parent / "fixtures" / "artists.json"
 
 from tracker import matching, pipeline, quality, sources  # noqa: E402
 from tracker.sources import SourceError  # noqa: E402
@@ -67,6 +70,7 @@ class FakeFetcher:
 
     def youtube_search(self, q, limit, since):
         self.calls.append(("yts", q))
+        self.yt_limits = getattr(self, "yt_limits", []) + [limit]
         if "youtube" in self.fail:
             raise SourceError("Sign in to confirm you're not a bot")
         return copy.deepcopy(self.yt_results)
@@ -74,8 +78,9 @@ class FakeFetcher:
     def youtube_channel(self, ch, limit):
         return []
 
-    def soundcloud_search(self, q, limit):
+    def soundcloud_search(self, q, limit, since=None):
         self.calls.append(("scs", q))
+        self.limits = getattr(self, "limits", []) + [limit]
         if "soundcloud" in self.fail:
             raise SourceError("HTTP Error 403")
         return copy.deepcopy(self.sc_results)
@@ -173,6 +178,21 @@ class Matching(unittest.TestCase):
         year1 = {"title": "Yousuke Yukimatsu – Rainbow Disco Club 2025", "durationSec": 5400}
         year2 = {"title": "Yousuke Yukimatsu – Rainbow Disco Club 2026", "durationSec": 5420}
         self.assertFalse(matching.same_recording(year1, year2, self.aliases))
+
+    def test_radio_episodes_of_the_same_length_are_different_sets(self):
+        ep1 = {"title": "NTS - Body Motion w/ Yousuke Yukimatsu (091118)", "durationSec": 3600}
+        ep2 = {"title": "NTS - Body Motion w Yousuke Yukimatsu & Bossman Wines 260419", "durationSec": 3600}
+        self.assertFalse(matching.same_recording(ep1, ep2, self.aliases))
+        bare = {"title": "Yousuke Yukimatsu", "durationSec": 7200}
+        self.assertFalse(matching.same_recording(bare, {"title": "Yukimatsu @ Lot Radio", "durationSec": 7200},
+                                                 self.aliases))
+        # A real reupload keeps the title, slot length or not.
+        self.assertTrue(matching.same_recording(ep1, {"title": "Yousuke Yukimatsu - NTS Body Motion 091118",
+                                                      "durationSec": 3601}, self.aliases))
+        # Off a radio slot, the same length to the second plus a bare title is enough.
+        self.assertTrue(matching.same_recording({"title": "Yousuke Yukimatsu", "durationSec": 3734},
+                                                {"title": "¥ØU$UK€ ¥UK1MAT$U | Boiler Room: Osaka", "durationSec": 3735},
+                                                self.aliases))
 
     def test_stylised_name_tokens_collapse(self):
         self.assertEqual(matching.title_tokens("¥ØU$UK€ ¥UK1MAT$U | Boiler Room: Tokyo", self.aliases),
@@ -376,6 +396,34 @@ class Sources(unittest.TestCase):
                 {"ie_key": "Youtube", "id": "RDT1tcUfUhR5U"}]
         self.assertTrue(sources._is_video(keep))
         self.assertFalse(any(sources._is_video(e) for e in drop))
+
+    def test_youtube_api_pages_until_the_limit(self):
+        pages = [{"items": [{"id": {"videoId": f"v{i:010d}"}} for i in range(50)], "nextPageToken": "p2"},
+                 {"items": [{"id": {"videoId": f"w{i:010d}"}} for i in range(50)], "nextPageToken": "p3"},
+                 {"items": [{"id": {"videoId": "x0000000000"}}]}]
+        calls = []
+
+        def fake_get(endpoint, params, key):
+            calls.append((endpoint, dict(params)))
+            return pages[len([c for c in calls if c[0] == "search"]) - 1]
+        original = (sources._api_get, sources.youtube_videos_api)
+        sources._api_get = fake_get
+        sources.youtube_videos_api = lambda ids, key: ids
+        try:
+            ids = sources.youtube_search_api("q", 120, "2026-09-01T00:00:00Z", "k")
+        finally:
+            sources._api_get, sources.youtube_videos_api = original
+        self.assertEqual(len(ids), 101)
+        self.assertEqual([c[1].get("pageToken") for c in calls], [None, "p2", "p3"])
+        self.assertEqual([c[1]["maxResults"] for c in calls], [50, 50, 20])
+        self.assertTrue(all(c[1]["publishedAfter"] == "2026-09-01T00:00:00Z" for c in calls))
+
+    def test_soundcloud_date_filter_covers_the_start(self):
+        now = datetime.now(timezone.utc)
+        self.assertEqual(sources._soundcloud_window(None), "last_month")
+        self.assertEqual(sources._soundcloud_window(pipeline.iso(now - timedelta(days=3))), "last_month")
+        self.assertEqual(sources._soundcloud_window(pipeline.iso(now - timedelta(days=90))), "last_year")
+        self.assertIsNone(sources._soundcloud_window(pipeline.iso(now - timedelta(days=500))))
 
     def test_search_url_sorts_by_date_and_keeps_videos(self):
         from urllib.parse import parse_qs, urlparse
@@ -597,20 +645,29 @@ class Pipeline(unittest.TestCase):
         self.assertIn(pipeline.job_key(styled, "youtube", "search", "¥ØU$UK€ ¥UK1MAT$U"), s2.state["baselined"])
 
     def test_approximate_dates_from_listings(self):
-        def approx(vid, title, hours_ago):
-            return yt(vid, title, 70, published=pipeline.iso(NOW - timedelta(hours=hours_ago)), precision="approx")
-        # First look at YouTube: an approximate date is not proof of being new.
-        s, out = scan(FakeFetcher(yt_results=[approx("a", "Yukimatsu set", 5)]),
-                      state={"baselined": keys(platform="soundcloud")})
-        self.assertEqual(s.seen["yt:a"]["reason"], "baseline")
-        # After the baseline: three weeks ago is old, two hours ago is new.
-        f = FakeFetcher(yt_results=[approx("o", "Yukimatsu old set", 24 * 21), approx("n", "Yukimatsu new set", 2)],
-                        enrich={"yt:o": SourceError("bot"), "yt:n": SourceError("bot")})
-        s2, out2 = scan(f)
-        self.assertEqual(s2.seen["yt:o"]["reason"], "before")
-        self.assertNotIn(("enrich", "yt:o"), f.calls)
+        def approx(vid, title, when):
+            return yt(vid, title, 70, published=pipeline.iso(when), precision="approx")
+        since = pipeline.parse_time(SINCE)
+        blocked = {"yt:a": SourceError("bot"), "yt:b": SourceError("bot"), "yt:o": SourceError("bot")}
+        # First look at YouTube (SoundCloud has been seen before).
+        first = FakeFetcher(yt_results=[approx("a", "Yukimatsu set", NOW - timedelta(hours=5)),
+                                        approx("b", "Yukimatsu other set", since + timedelta(hours=10)),
+                                        approx("o", "Yukimatsu old set", NOW - timedelta(days=21))],
+                            enrich=blocked)
+        s, out = scan(first, state={"baselined": keys(platform="soundcloud")})
+        # "5 hours ago" is clearly after the start: judged even on a first look.
+        self.assertEqual(by_id(out)["yt:a"]["status"], "accepted")
+        self.assertEqual(by_id(out)["yt:a"]["publishedPrecision"], "approx")
+        # Too close to the start to tell from a rough date: noted as already there.
+        self.assertEqual(s.seen["yt:b"]["reason"], "baseline")
+        # Three weeks ago is before the start.
+        self.assertEqual(s.seen["yt:o"]["reason"], "before")
+        self.assertNotIn(("enrich", "yt:o"), first.calls)
+        # After the first look, a new roughly dated upload counts as new.
+        later = FakeFetcher(yt_results=[approx("n", "Yukimatsu new set", NOW + timedelta(hours=1))],
+                            enrich={"yt:n": SourceError("bot")})
+        _, out2 = scan(later, state=s.state, data=out, now=NOW + timedelta(hours=2))
         self.assertEqual(by_id(out2)["yt:n"]["status"], "accepted")
-        self.assertEqual(by_id(out2)["yt:n"]["publishedPrecision"], "approx")
 
     def test_reupload_of_baseline_set_rejected(self):
         old = yt("o", "Yousuke Yukimatsu | Boiler Room Tokyo", 60.5, published=None)
@@ -648,11 +705,12 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(pipeline.validate_config(CONFIG), [])
         bad = {"artists": [{"id": "a"}, {"id": "a", "name": "x", "trackingSince": "nope", "sources": {}}]}
         problems = pipeline.validate_config(bad)
-        self.assertTrue(any("trackingSince" in p for p in problems))
-        self.assertTrue(any("to gange" in p for p in problems))
+        self.assertTrue(any("startdatoen" in p for p in problems), problems)
+        self.assertTrue(any("bruges af en anden" in p for p in problems), problems)
+        self.assertTrue(any("mangler et navn" in p for p in problems), problems)
 
-    def test_shipped_config_is_valid(self):
-        cfg = json.loads((ROOT / "config" / "artists.json").read_text("utf-8"))
+    def test_fixture_config_is_valid(self):
+        cfg = json.loads(FIXTURE_CONFIG.read_text("utf-8"))
         self.assertEqual(pipeline.validate_config(cfg), [])
 
     def test_every_spelling_is_searched_on_every_platform(self):
@@ -672,8 +730,8 @@ class Pipeline(unittest.TestCase):
             self.assertIn("Yousuke Yukimatsu", searched, kind)
             self.assertIn("¥ØU$UK€ ¥UK1MAT$U", searched, kind)
 
-    def test_shipped_config_searches_plain_and_stylised_names_everywhere(self):
-        artist = json.loads((ROOT / "config" / "artists.json").read_text("utf-8"))["artists"][0]
+    def test_config_searches_plain_and_stylised_names_everywhere(self):
+        artist = json.loads(FIXTURE_CONFIG.read_text("utf-8"))["artists"][0]
         for platform in ("youtube", "soundcloud"):
             queries = pipeline.search_queries(artist, platform)
             for name in ("Yousuke Yukimatsu", "¥ØU$UK€ ¥UK1MAT$U", "YØU$UK€ YUK1MAT$U", "行松陽介"):
@@ -686,7 +744,7 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(q["search_query"], [name])
 
     def test_spelling_variants_in_titles_are_recognised(self):
-        artist = json.loads((ROOT / "config" / "artists.json").read_text("utf-8"))["artists"][0]
+        artist = json.loads(FIXTURE_CONFIG.read_text("utf-8"))["artists"][0]
         scanner = pipeline.Scanner({"artists": [artist]}, {}, {}, FakeFetcher(), now=NOW, log=lambda *a: None)
         aliases = scanner._aliases(artist)
         for title in ["YØU$UK€ YUK1MAT$U live set in Sofia", "Yousuke Yuk1matsu @ Boiler Room",
@@ -716,6 +774,149 @@ class Pipeline(unittest.TestCase):
             sources.youtube_search_api, sources.youtube_search_ytdlp = original
         self.assertEqual(calls, ["api", "page"])
         self.assertEqual(found[0]["id"], "yt:a")
+
+    # -- start date changed in the app ---------------------------------------
+
+    def _artist(self, **kw):
+        return dict(copy.deepcopy(ARTIST), **kw)
+
+    def _cfg(self, *artists):
+        return dict(copy.deepcopy(CONFIG), artists=list(artists))
+
+    def test_known_artist_without_start_history_is_left_alone(self):
+        # State from before start dates were tracked: no deep search, nothing reopened.
+        f = FakeFetcher(yt_results=[yt("a", "Yukimatsu DJ set", 62)])
+        s, out = scan(f)
+        state = copy.deepcopy(s.state)
+        state.pop("since")
+        f2 = FakeFetcher()
+        s2, _ = scan(f2, state=state, data=out, now=NOW + timedelta(hours=2))
+        self.assertEqual(set(f2.yt_limits), {40})
+        self.assertEqual(s2.state["since"]["yy"], pipeline.iso(pipeline.parse_time(SINCE)))
+
+    def test_moving_the_start_back_reopens_older_uploads(self):
+        older = yt("old", "Yousuke Yukimatsu | Boiler Room: Osaka", 62, published="2026-09-20T18:00:00Z",
+                   uploader="Boiler Room")
+        s, out = scan(FakeFetcher(yt_results=[older]))
+        self.assertEqual(s.seen["yt:old"]["reason"], "before")
+        self.assertEqual(s.seen["yt:old"]["precision"], "datetime")
+        # In the app the start is moved to 1 September.
+        cfg = self._cfg(self._artist(trackingSince="2026-09-01T00:00:00Z"))
+        f2 = FakeFetcher(yt_results=[older])
+        s2, out2 = scan(f2, state=s.state, data=out, now=NOW + timedelta(hours=2), config=cfg)
+        self.assertEqual(by_id(out2)["yt:old"]["status"], "accepted")
+        self.assertNotIn("yt:old", s2.seen)
+        self.assertEqual(set(f2.yt_limits), {150})          # the search reached further back
+        self.assertEqual(out2["artists"][0]["trackingSince"], "2026-09-01T00:00:00Z")
+        # The run after that searches as usual again.
+        f3 = FakeFetcher(yt_results=[older])
+        scan(f3, state=s2.state, data=out2, now=NOW + timedelta(hours=4), config=cfg)
+        self.assertEqual(set(f3.yt_limits), {40})
+
+    def test_moving_the_start_forward_drops_what_is_now_before_it(self):
+        early = yt("e", "Yousuke Yukimatsu DJ set", 62, published="2026-10-05T18:00:00Z")
+        late = yt("l", "Yukimatsu all night long", 240, published="2026-10-09T18:00:00Z")
+        s, out = scan(FakeFetcher(yt_results=[early, late]))
+        self.assertEqual({it["id"] for it in out["items"]}, {"yt:e", "yt:l"})
+        cfg = self._cfg(self._artist(trackingSince="2026-10-08T00:00:00Z"))
+        s2, out2 = scan(FakeFetcher(yt_results=[early, late]), state=s.state, data=out,
+                        now=NOW + timedelta(hours=2), config=cfg)
+        self.assertEqual({it["id"] for it in out2["items"]}, {"yt:l"})
+        self.assertEqual(s2.seen["yt:e"]["reason"], "before")
+
+    def test_new_artist_starting_in_the_past_searches_deep_and_judges_dated_finds(self):
+        other = self._artist(id="dj", name="DJ Other", displayName="DJ Other", searchNames=["DJ Other"],
+                             aliases=[], trackingSince="2026-09-01T00:00:00Z",
+                             sources={"youtube": {}, "soundcloud": {}})
+        cfg = self._cfg(copy.deepcopy(ARTIST), other)
+        two_weeks = yt("w", "DJ Other – live at Somewhere (full set)", 90,
+                       published=pipeline.iso(NOW - timedelta(days=14)), precision="approx", uploader="Boiler Room")
+        f = FakeFetcher(yt_results=[two_weeks], enrich={"yt:w": SourceError("bot")},
+                        analysis={"yt:w": SourceError("bot")})
+        _, out = scan(f, state={"baselined": keys(self._cfg(copy.deepcopy(ARTIST)))}, config=cfg)
+        self.assertEqual(by_id(out)["yt:w"]["status"], "accepted")
+        self.assertEqual(by_id(out)["yt:w"]["artistId"], "dj")
+        self.assertIn(150, f.yt_limits)
+
+    def test_out_of_time_the_oldest_wait_for_the_next_scan(self):
+        # On this clock every sound check takes ten minutes; judging stops after fifteen.
+        t = [0.0]
+
+        class Slow(FakeFetcher):
+            def analyze(self, item, seconds):
+                t[0] += 600
+                return super().analyze(item, seconds)
+
+        sets = [yt(f"s{i}", f"Yousuke Yukimatsu DJ set {i}", 62, published=f"2026-10-0{5 + i}T18:00:00Z")
+                for i in range(4)]
+
+        def run(state, data, now):
+            t[0] = 0.0
+            f = Slow(yt_results=sets)
+            s = pipeline.Scanner(copy.deepcopy(CONFIG), state, data, f, now=now, log=lambda *a: None,
+                                 clock=lambda: t[0])
+            return s, s.run(), f
+
+        s, out, _ = run({"baselined": keys()}, {}, NOW)
+        # The newest two are judged; the two oldest are neither shown nor remembered.
+        self.assertEqual(sorted(by_id(out)), ["yt:s2", "yt:s3"])
+        self.assertEqual(out["artists"][0]["backlog"], 2)
+        self.assertNotIn("yt:s0", s.seen)
+        self.assertEqual(s.state["deepPending"], ["yy"])
+        self.assertIn("2 uploads vurderes ved næste scanning", pipeline.step_summary(out))
+        # The next scan searches as deep again and judges the rest.
+        s2, out2, f2 = run(s.state, out, NOW + timedelta(hours=2))
+        self.assertEqual(set(f2.yt_limits), {150})
+        self.assertEqual(sorted(by_id(out2)), ["yt:s0", "yt:s1", "yt:s2", "yt:s3"])
+        self.assertEqual(out2["artists"][0]["backlog"], 0)
+        self.assertEqual(s2.state["deepPending"], [])
+        _, _, f3 = run(s2.state, out2, NOW + timedelta(hours=4))
+        self.assertEqual(set(f3.yt_limits), {40})
+
+    def test_out_of_time_nothing_more_is_fetched(self):
+        waiting = dict(yt("p", "Yousuke Yukimatsu live", None), artistId="yy", status="pending",
+                       pendingSince=pipeline.iso(NOW - timedelta(hours=3)))
+        f = FakeFetcher(yt_results=[yt("n", "Yousuke Yukimatsu DJ set", 62)])
+        clock = iter(range(0, 10 ** 9, 10 ** 4)).__next__     # each look at the clock is hours later
+        s = pipeline.Scanner(copy.deepcopy(CONFIG), {"baselined": keys()}, {"items": [waiting]}, f, now=NOW,
+                             log=lambda *a: None, clock=clock)
+        out = s.run()
+        self.assertFalse([c for c in f.calls if c[0] in ("enrich", "analyze")])
+        self.assertEqual(by_id(out)["yt:p"]["status"], "pending")
+        self.assertNotIn("yt:n", by_id(out))
+        self.assertNotIn("yt:n", s.seen)
+        self.assertEqual(out["artists"][0]["backlog"], 1)
+
+    def test_removed_artist_is_forgotten(self):
+        other = self._artist(id="dj", name="DJ Other", displayName="DJ Other", searchNames=["DJ Other"], aliases=[])
+        cfg = self._cfg(copy.deepcopy(ARTIST), other)
+        f = FakeFetcher(yt_results=[yt("a", "Yukimatsu DJ set", 62), yt("b", "DJ Other – set", 90),
+                                    yt("c", "DJ Other – old", 90, published="2026-01-01T00:00:00Z")])
+        s, out = scan(f, state={"baselined": keys(cfg)}, config=cfg)
+        self.assertIn("yt:b", by_id(out))
+        s2, out2 = scan(FakeFetcher(), state=s.state, data=out, now=NOW + timedelta(hours=2),
+                        config=self._cfg(copy.deepcopy(ARTIST)))
+        self.assertEqual({it["artistId"] for it in out2["items"]}, {"yy"})
+        self.assertFalse(any(v["artistId"] == "dj" for v in s2.seen.values()))
+        self.assertFalse(any(k.startswith("dj:") for k in s2.state["baselined"]))
+        self.assertNotIn("dj", s2.state["since"])
+
+    def test_a_broken_artist_is_skipped_and_reported(self):
+        broken = {"id": "bad", "name": "Broken", "trackingSince": "not a date", "sources": {}}
+        ready, problems = pipeline.prepare_config(self._cfg(copy.deepcopy(ARTIST), broken))
+        self.assertEqual([a["id"] for a in ready["artists"]], ["yy"])
+        self.assertTrue(problems and "Broken" in problems[0])
+        f = FakeFetcher(yt_results=[yt("a", "Yukimatsu DJ set", 62)])
+        s, out = scan(f, config=ready)
+        self.assertEqual(out["problems"], problems)
+        self.assertIn("yt:a", by_id(out))
+        # The broken artist's earlier results are kept until it is fixed or removed.
+        self.assertNotIn("bad", {a["id"] for a in out["artists"]})
+
+    def test_output_lists_profiles(self):
+        _, out = scan(FakeFetcher())
+        self.assertEqual(out["artists"][0]["profiles"], {"soundcloud": ["yousukeyukimatsu"], "youtube": []})
+        self.assertEqual(out["problems"], [])
 
     def test_second_artist_is_independent(self):
         other = copy.deepcopy(ARTIST)

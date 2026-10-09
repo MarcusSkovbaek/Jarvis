@@ -126,13 +126,21 @@ def title_similarity(a, b, aliases=()):
     return len(sa & sb) / len(sa | sb)
 
 
+def _radio_slot(seconds):
+    """Within two seconds of a five-minute mark: the length of a radio slot."""
+    rest = int(seconds) % 300
+    return min(rest, 300 - rest) <= 2
+
+
 def same_recording(a, b, aliases=()):
     """Heuristic: two uploads of the same set (a reupload or a cross-post).
 
     The same audio has the same length to within a few seconds, so that plus
-    any shared title word is enough. A looser length match (a trimmed intro,
-    a different encoder) needs nearly the same title: "Boiler Room: Osaka"
-    and "Boiler Room: Tokyo" of similar length are two different sets.
+    a shared title is enough. A looser length match (a trimmed intro, a
+    different encoder) needs nearly the same title: "Boiler Room: Osaka" and
+    "Boiler Room: Tokyo" of similar length are two different sets. Radio
+    shows run in fixed slots, so two episodes of exactly 60:00 prove nothing
+    by their length; they too need nearly the same title.
     """
     da, db = a.get("durationSec"), b.get("durationSec")
     if not da or not db:
@@ -140,7 +148,7 @@ def same_recording(a, b, aliases=()):
     if abs(da - db) > max(45, 0.015 * max(da, db)):
         return False
     sim = title_similarity(a.get("title", ""), b.get("title", ""), aliases)
-    if abs(da - db) <= 3:
+    if abs(da - db) <= 3 and not _radio_slot(max(da, db)):
         bare = not title_tokens(a.get("title", ""), aliases) or not title_tokens(b.get("title", ""), aliases)
-        return bare or sim >= 0.2
+        return bare or sim >= 0.5
     return sim >= 0.75

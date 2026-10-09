@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,6 +74,24 @@ def published_after(item, since):
     return when > since
 
 
+def clearly_after(item, since):
+    """Published after the start even at the far end of its uncertainty.
+
+    Used on a search's first answer, where an upload that is only roughly
+    dated normally counts as old. With a start date in the past, "2 weeks
+    ago" can still be clearly inside the window.
+    """
+    if not item.get("publishedAt"):
+        return False
+    precision = item.get("publishedPrecision")
+    if precision == "date":
+        return item["publishedAt"][:10] > (since + timedelta(days=1)).date().isoformat()
+    when = parse_time(item["publishedAt"])
+    if precision == "approx":
+        return when >= since + APPROX_SLACK
+    return when > since
+
+
 # ---------------------------------------------------------------------------
 # Network access, behind one object so tests can replace it
 # ---------------------------------------------------------------------------
@@ -94,8 +113,8 @@ class Fetcher:
     def youtube_channel(self, channel, limit):
         return sources.youtube_channel_ytdlp(channel, limit)
 
-    def soundcloud_search(self, query, limit):
-        return sources.soundcloud_search(query, limit)
+    def soundcloud_search(self, query, limit, since_iso=None):
+        return sources.soundcloud_search(query, limit, since_iso)
 
     def soundcloud_user(self, user, limit):
         return sources.soundcloud_user(user, limit)
@@ -165,7 +184,7 @@ def job_key(artist, platform, kind, value):
 
 
 class Scanner:
-    def __init__(self, config, state, data, fetcher, now=None, log=print):
+    def __init__(self, config, state, data, fetcher, now=None, log=print, clock=time.monotonic):
         self.config = config
         self.settings = config.get("settings", {})
         self.trusted = config.get("trustedUploaders", [])
@@ -179,6 +198,11 @@ class Scanner:
         # artist or platform; those are ignored, which costs one more baseline.)
         self.baselined = {b for b in state.get("baselined", []) if b.count(":") >= 3}
         self.items = {it["id"]: it for it in data.get("items", [])}
+        # The start date each artist was scanned with last time, to notice when
+        # it is changed in the app: earlier means look again further back,
+        # later means drop what is now before the start.
+        self.since_state = state.setdefault("since", {})
+        self.problems = list(config.get("_problems", []))
         self.fetch = fetcher
         self.now = now or datetime.now(timezone.utc)
         self.log = log
@@ -186,8 +210,22 @@ class Scanner:
         self.min_sec = int(self.settings.get("minDurationMinutes", 30)) * 60
         self.min_score = int(self.settings.get("minQualityScore", 60))
         self.limit = int(self.settings.get("maxResultsPerQuery", 40))
+        self.deep_limit = max(self.limit, int(self.settings.get("deepResultsPerQuery", 150)))
+        # Judging an upload (details and a sound check) takes seconds to
+        # minutes. A start date moved a year back can turn up far more than one
+        # job may take: past GitHub's time limit nothing is saved, and the next
+        # scan would try the same again. So judging stops after this long and
+        # the rest waits for the next scan, which searches as deep again.
+        self.clock = clock
+        self.started = clock()
+        self.budget = float(self.settings.get("judgeBudgetMinutes", 15)) * 60
+        self.deferred = {}
+        self.deep_pending = set(state.get("deepPending", []))
 
     # -- helpers ------------------------------------------------------------
+
+    def out_of_time(self):
+        return self.clock() - self.started > self.budget
 
     def _aliases(self, artist):
         names = [artist.get("name"), artist.get("displayName"), *artist.get("searchNames", []),
@@ -205,17 +243,19 @@ class Scanner:
         self.seen[item["id"]] = {
             "artistId": artist["id"], "reason": reason,
             "title": item.get("title", "")[:200], "durationSec": item.get("durationSec"),
-            "publishedAt": item.get("publishedAt"), "at": iso(self.now),
+            "publishedAt": item.get("publishedAt"), "precision": item.get("publishedPrecision"),
+            "url": item.get("url"), "at": iso(self.now),
         }
 
-    def _jobs(self, artist):
+    def _jobs(self, artist, limit=None):
         """(platform, label, key, fetch) for every search, channel and profile."""
         since = iso(parse_time(artist["trackingSince"]))
+        n = limit or self.limit
         fetch = {
-            ("youtube", "search"): lambda q: self.fetch.youtube_search(q, self.limit, since),
-            ("youtube", "channel"): lambda ch: self.fetch.youtube_channel(ch, self.limit),
-            ("soundcloud", "search"): lambda q: self.fetch.soundcloud_search(q, self.limit),
-            ("soundcloud", "user"): lambda u: self.fetch.soundcloud_user(u, self.limit),
+            ("youtube", "search"): lambda q: self.fetch.youtube_search(q, n, since),
+            ("youtube", "channel"): lambda ch: self.fetch.youtube_channel(ch, n),
+            ("soundcloud", "search"): lambda q: self.fetch.soundcloud_search(q, n, since),
+            ("soundcloud", "user"): lambda u: self.fetch.soundcloud_user(u, n),
         }
         labels = {("youtube", "search"): "YouTube-søgning “{}”", ("youtube", "channel"): "YouTube-kanal {}",
                   ("soundcloud", "search"): "SoundCloud-søgning “{}”", ("soundcloud", "user"): "SoundCloud-profil {}"}
@@ -302,10 +342,14 @@ class Scanner:
             # Tracks, edits and clips: never sets, so not worth showing either.
             self._remember(item, artist, "short")
             return None
-        if first_run and item.get("publishedPrecision") != "datetime":
-            # The scanner's first look at this platform: anything it cannot
-            # date exactly was online already.
+        if first_run and item.get("publishedPrecision") != "datetime" and not clearly_after(item, since):
+            # A search's first answer: anything it cannot date exactly was
+            # online already, unless even a rough date puts it after the start.
             self._remember(item, artist, "baseline")
+            return None
+        if self.out_of_time():
+            # Not remembered, so the next scan finds it and judges it then.
+            self.deferred[artist["id"]] = self.deferred.get(artist["id"], 0) + 1
             return None
 
         needs_more = (not item.get("publishedAt") or not item.get("durationSec") or not item.get("audio")
@@ -352,6 +396,8 @@ class Scanner:
                                    if item.get("liveStatus") in LIVE
                                    else [f"Længden kunne ikke aflæses i {max_days} dage"])
                 continue
+            if self.out_of_time():
+                continue                    # still pending; looked at again next scan
             try:
                 fresh = dict(self.fetch.enrich(item), artistId=artist["id"])
             except SourceError as e:
@@ -388,15 +434,69 @@ class Scanner:
 
     # -- the whole run --------------------------------------------------------
 
+    def apply_start(self, artist, since):
+        """Bring stored results in line with the artist's start date.
+
+        Returns True when this run should search further back than usual: the
+        start was moved earlier, or a new artist starts in the past.
+        """
+        aid = artist["id"]
+        previous = parse_time(self.since_state.get(aid)) if self.since_state.get(aid) else None
+        self.since_state[aid] = iso(since)
+        if previous is None:
+            known = (any(s.get("artistId") == aid for s in self.seen.values())
+                     or any(it.get("artistId") == aid for it in self.items.values()))
+            # Known artist from before start dates were tracked: nothing changed.
+            return not known and since < self.now - timedelta(days=1)
+        if since < previous:
+            # Uploads judged too old under the previous start may count now.
+            reopened = 0
+            for key, entry in list(self.seen.items()):
+                if (entry.get("artistId") == aid and entry.get("reason") in ("before", "baseline", "expired")
+                        and entry.get("publishedAt")
+                        and published_after({"publishedAt": entry["publishedAt"],
+                                             "publishedPrecision": entry.get("precision") or "approx"}, since)):
+                    del self.seen[key]
+                    reopened += 1
+            self.log(f"  start moved back to {iso(since)}: {reopened} older uploads will be judged again")
+            return True
+        if since > previous:
+            dropped = 0
+            for item_id, item in list(self.items.items()):
+                if item.get("artistId") == aid and published_after(item, since) is False:
+                    self._remember(item, artist, "before")
+                    del self.items[item_id]
+                    dropped += 1
+            self.log(f"  start moved forward to {iso(since)}: {dropped} sets are now before it")
+        return False
+
+    def forget_removed_artists(self, known_ids):
+        """Results of artists no longer in the config are dropped; re-adding one starts fresh."""
+        for item_id, item in list(self.items.items()):
+            if item.get("artistId") not in known_ids:
+                del self.items[item_id]
+        for key, entry in list(self.seen.items()):
+            if entry.get("artistId") not in known_ids:
+                del self.seen[key]
+        self.baselined = {b for b in self.baselined if b.split(":", 1)[0] in known_ids}
+        for aid in list(self.since_state):
+            if aid not in known_ids:
+                del self.since_state[aid]
+        self.deep_pending &= set(known_ids)
+
     def run(self):
+        known_ids = {a.get("id") for a in self.config.get("_allArtists", self.config["artists"])}
+        self.forget_removed_artists(known_ids)
         for artist in self.config["artists"]:
             since = parse_time(artist["trackingSince"])
+            # Also deep when the last scan ran out of time before it was done.
+            deep = self.apply_start(artist, since) or artist["id"] in self.deep_pending
             fresh = [f"{pf} {kind} {value}" for pf, kind, value in job_specs(artist)
                      if job_key(artist, pf, kind, value) not in self.baselined]
-            self.log(f"{artist['name']}: tracking since {iso(since)}"
+            self.log(f"{artist['name']}: tracking since {iso(since)}{' (searching further back)' if deep else ''}"
                      f"{' (first look, taken as baseline: ' + '; '.join(fresh) + ')' if fresh else ''}")
             batch, found_by, answered = {}, {}, []
-            for platform, label, key, job in self._jobs(artist):
+            for platform, label, key, job in self._jobs(artist, self.deep_limit if deep else self.limit):
                 entry = {"artistId": artist["id"], "platform": platform, "label": label, "at": iso(self.now)}
                 try:
                     found = job()
@@ -414,7 +514,8 @@ class Scanner:
                          f"{entry.get('found')} {entry.get('error', '')}")
 
             handled = set()
-            ordered = sorted(batch.values(), key=lambda it: it.get("publishedAt") or "9999")
+            # Newest first: if time runs out, what waits is the oldest.
+            ordered = sorted(batch.values(), key=lambda it: it.get("publishedAt") or "", reverse=True)
             for it in ordered:
                 # Only searches that have answered before can tell new from old.
                 first = not (found_by[it["id"]] & self.baselined)
@@ -424,8 +525,16 @@ class Scanner:
             self.recheck_pending(artist, since, handled)
             self.dedupe(artist, handled)
             self.baselined.update(answered)
+            waiting = self.deferred.get(artist["id"], 0)
+            if waiting:
+                self.deep_pending.add(artist["id"])
+                self.log(f"  out of time: {waiting} uploads are judged at the next scan")
+            else:
+                self.deep_pending.discard(artist["id"])
         self.prune()
         self.state["baselined"] = sorted(self.baselined)
+        self.state["since"] = self.since_state
+        self.state["deepPending"] = sorted(self.deep_pending)
         return self.output()
 
     def prune(self):
@@ -447,6 +556,12 @@ class Scanner:
             "subtitle": a.get("subtitle") or (a["name"] if a.get("displayName") not in (None, a["name"]) else ""),
             "searchNames": [q for q in search_queries({"searchNames": a.get("searchNames", [])}, "")] or [a["name"]],
             "trackingSince": iso(parse_time(a["trackingSince"])), "links": a.get("links", {}),
+            "profiles": {
+                "soundcloud": list(a.get("sources", {}).get("soundcloud", {}).get("users", [])),
+                "youtube": list(a.get("sources", {}).get("youtube", {}).get("channels", [])),
+            },
+            # Uploads found but not judged yet, because the scan ran out of time.
+            "backlog": self.deferred.get(a["id"], 0),
         } for a in self.config["artists"]]
         items = []
         for it in self.items.values():
@@ -465,6 +580,7 @@ class Scanner:
                 "scanIntervalHours": self.settings.get("scanIntervalHours", 2),
             },
             "artists": artists,
+            "problems": self.problems,
             "health": self.health,
             "items": items,
         }
@@ -553,6 +669,13 @@ def probe(config, urls):
 def step_summary(output):
     """Markdown for the GitHub Actions run page."""
     lines = ["## Sætradar", ""]
+    for problem in output.get("problems", []):
+        lines.append(f"> ⚠ Sprunget over: {problem}")
+    if output.get("problems"):
+        lines.append("")
+    waiting = sum(a.get("backlog", 0) for a in output.get("artists", []))
+    if waiting:
+        lines += [f"> ⏳ Tiden til at vurdere sæt blev brugt op: {waiting} uploads vurderes ved næste scanning.", ""]
     status = {"accepted": "✅ med", "rejected": "✖ fra", "duplicate": "↔ dublet", "pending": "⏳ afventer"}
     if output["items"]:
         lines += ["| Status | Kvalitet | Titel |", "|---|---|---|"]
@@ -569,27 +692,57 @@ def step_summary(output):
     return "\n".join(lines) + "\n"
 
 
-def validate_config(config):
+def artist_problems(artist, seen_ids=()):
+    """What is wrong with one artist entry, in Danish, or [] when it can be scanned."""
+    who = artist.get("name") or artist.get("id") or "?"
     problems = []
-    ids = set()
+    aid = artist.get("id")
+    if not isinstance(aid, str) or not aid.strip() or ":" in aid:
+        problems.append(f"{who}: mangler et gyldigt id")
+    elif aid in seen_ids:
+        problems.append(f"{who}: id'et '{aid}' bruges af en anden kunstner")
+    if not isinstance(artist.get("name"), str) or not artist["name"].strip():
+        problems.append(f"{who}: mangler et navn")
+    try:
+        if parse_time(artist.get("trackingSince")) is None:
+            raise ValueError
+    except Exception:
+        problems.append(f"{who}: startdatoen er ikke en gyldig dato")
+    sources_ = artist.get("sources")
+    if not isinstance(sources_, dict):
+        problems.append(f"{who}: mangler 'sources'")
+    elif not problems and not job_specs(artist):
+        problems.append(f"{who}: ingen stavemåder, søgninger eller profiler at holde øje med")
+    return problems
+
+
+def validate_config(config):
+    """Every problem in the config, for tests and for the command line."""
+    problems, ids = [], set()
     for a in config.get("artists", []):
-        for key in ("id", "name", "trackingSince", "sources"):
-            if not a.get(key):
-                problems.append(f"artist {a.get('id', '?')}: mangler '{key}'")
-        if a.get("id") in ids:
-            problems.append(f"artist-id '{a['id']}' bruges to gange")
+        problems += artist_problems(a, ids)
         ids.add(a.get("id"))
-        try:
-            parse_time(a.get("trackingSince"))
-        except Exception:
-            problems.append(f"artist {a.get('id')}: trackingSince er ikke en gyldig dato")
-        if a.get("sources") and not (search_queries(a, "youtube") or search_queries(a, "soundcloud")
-                                     or a["sources"].get("soundcloud", {}).get("users")
-                                     or a["sources"].get("youtube", {}).get("channels")):
-            problems.append(f"artist {a.get('id')}: ingen searchNames, søgninger eller profiler at holde øje med")
     if not config.get("artists"):
         problems.append("ingen kunstnere i config")
     return problems
+
+
+def prepare_config(config):
+    """Split the config into the artists that can be scanned and the problems of the rest.
+
+    The app edits the config, so one bad entry must not stop the others:
+    it is skipped, and its problem is shown on the page.
+    """
+    good, problems, ids = [], [], set()
+    for a in config.get("artists", []):
+        found = artist_problems(a, ids)
+        ids.add(a.get("id"))
+        if found:
+            problems += found
+        else:
+            good.append(a)
+    ready = dict(config, artists=good, _allArtists=list(config.get("artists", [])), _problems=problems)
+    return ready, problems
 
 
 def main(argv=None):
@@ -605,18 +758,27 @@ def main(argv=None):
     data_dir = Path(args.data_dir)
     data_path, js_path, state_path = data_dir / "sets.json", data_dir / "sets.js", data_dir / "seen.json"
 
-    config = load_json(args.config, None)
+    try:
+        config = load_json(args.config, None)
+    except json.JSONDecodeError as e:
+        print(f"Config is not valid JSON: {e}", file=sys.stderr)
+        return 2
     if config is None:
         print(f"Config not found: {args.config}", file=sys.stderr)
         return 2
-    problems = validate_config(config)
+    config, problems = prepare_config(config)
     if problems:
-        print("Config problems:\n  " + "\n  ".join(problems), file=sys.stderr)
+        print("Skipped because of config problems:\n  " + "\n  ".join(problems), file=sys.stderr)
+    if not config["artists"] and not problems:
+        print("No artists in the config.", file=sys.stderr)
         return 2
     if args.no_analysis:
         config.setdefault("settings", {})["audioAnalysis"] = False
 
     if args.probe:
+        if not config["artists"]:
+            print("No artist to judge the links against.", file=sys.stderr)
+            return 2
         return probe(config, args.probe)
 
     if args.placeholder:
@@ -642,4 +804,4 @@ def main(argv=None):
             fh.write(step_summary(output))
     # A scan where every source failed is worth a red mark in Actions, but the
     # data written above (with the errors in it) is still useful to the page.
-    return 0 if output["scanOk"] else 1
+    return 0 if output["scanOk"] and config["artists"] else 1

@@ -1,0 +1,52 @@
+{
+  "settings": {
+    "minDurationMinutes": 30,
+    "minQualityScore": 60,
+    "maxResultsPerQuery": 40,
+    "audioAnalysis": true,
+    "analysisSegmentSeconds": 45,
+    "scanIntervalHours": 2,
+    "pendingMaxDays": 7,
+    "rejectedKeepDays": 120
+  },
+  "trustedUploaders": [
+    "boiler room", "rinse", "nts", "hor berlin", "hoer berlin", "lot radio",
+    "dekmantel", "rainbow disco club", "dommune", "resident advisor", "mixmag",
+    "dj mag", "cercle", "kiosk radio", "red bull music", "xlr8r", "dublab",
+    "unsound", "sonar", "mutek", "bassiani", "tresor", "fabric", "keep hush",
+    "be at tv", "worldwide fm", "refuge worldwide", "noods radio", "veneno",
+    "lyl radio", "intergalactic fm", "palms trax", "zone unknown"
+  ],
+  "artists": [
+    {
+      "id": "yousuke-yukimatsu",
+      "name": "Yousuke Yukimatsu",
+      "displayName": "¥ØU$UK€ ¥UK1MAT$U",
+      "subtitle": "Yousuke Yukimatsu · 行松陽介",
+      "trackingSince": "2026-10-04T19:50:00+02:00",
+      "searchNames": [
+        "Yousuke Yukimatsu",
+        "¥ØU$UK€ ¥UK1MAT$U",
+        "YØU$UK€ YUK1MAT$U",
+        "Yosuke Yukimatsu",
+        "行松陽介"
+      ],
+      "aliases": ["yukimatsu", "行松陽介", "行松 陽介", "ユキマツ"],
+      "links": {
+        "soundcloud": "https://soundcloud.com/yousukeyukimatsu",
+        "youtube": "https://www.youtube.com/results?search_query=Yousuke+Yukimatsu&sp=CAI%253D",
+        "residentAdvisor": "https://ra.co/dj/yosukeyukimatsu-jp"
+      },
+      "sources": {
+        "youtube": {
+          "searchQueries": ["Yousuke Yukimatsu DJ set"],
+          "channels": []
+        },
+        "soundcloud": {
+          "searchQueries": ["yukimatsu"],
+          "users": ["yousukeyukimatsu"]
+        }
+      }
+    }
+  ]
+}

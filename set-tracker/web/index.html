@@ -1,5 +1,9 @@
 <!doctype html>
-<html lang="da" data-remote="https://raw.githubusercontent.com/MarcusSkovbaek/Jarvis/set-tracker-data/sets.json">
+<html lang="da"
+  data-remote="https://raw.githubusercontent.com/MarcusSkovbaek/Jarvis/set-tracker-data/sets.json"
+  data-repo="MarcusSkovbaek/Jarvis"
+  data-config="set-tracker/config/artists.json"
+  data-workflow="set-tracker.yml">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -22,6 +26,7 @@
 <link rel="preload" href="assets/fonts/ibm-plex-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/app.css">
 <script defer src="assets/app.js"></script>
+<script defer src="assets/admin.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -37,7 +42,11 @@
     <a class="scan" id="scan" href="#kilder">
       <span class="led" id="scan-led" data-state="busy"></span>
       <span class="scan__text" id="scan-text">Henter sæt …</span>
+      <span class="scan__short" id="scan-short" aria-hidden="true">Henter</span>
     </a>
+    <button class="icon-btn" id="manage-open" type="button" data-manage="list" aria-label="Overvågninger" title="Overvågninger">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="M18 7h2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
     <button class="icon-btn" id="refresh" type="button" aria-label="Hent nyeste data" title="Hent nyeste data">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
     </button>
@@ -101,6 +110,21 @@
   </div>
   <p class="foot__fine">Hørt-markeringer gemmes i denne browser, på denne enhed.</p>
 </footer>
+
+<dialog class="sheet" id="manage" aria-labelledby="manage-title">
+  <div class="sheet__panel">
+    <div class="sheet__head">
+      <button class="icon-btn icon-btn--plain" id="manage-back" type="button" aria-label="Tilbage" hidden>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h2 class="sheet__title" id="manage-title">Overvågninger</h2>
+      <button class="icon-btn icon-btn--plain" id="manage-close" type="button" aria-label="Luk">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body" id="manage-body"></div>
+  </div>
+</dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden>
   <span id="toast-text"></span>

@@ -20,4 +20,4 @@ venv/
 set-tracker/web/data/seen.json
 tracker-data/
 _site/
-node_modules/
+node_modules

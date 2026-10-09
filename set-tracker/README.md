@@ -129,10 +129,50 @@ Med en YouTube-nøgle koster hver YouTube-søgning 100 af de 10.000 daglige
 enheder. Seks søgninger hver anden time bruger ca. 7.300. Slipper kvoten op,
 bruger Sætradaren automatisk YouTubes almindelige søgeside resten af dagen.
 
-## Tilføj en kunstner
+## Overvågninger i appen
 
-Alt om kunstnerne står i [`config/artists.json`](config/artists.json). Tilføj
-et objekt mere i `artists`:
+Tryk på knappen med skyderne i toppen af siden (**Overvågninger**). Uden
+forbindelse til GitHub kan du se, hvad der overvåges og fra hvilken dato. For
+at ændre noget skal appen have lov at gemme i repoet:
+
+1. Tryk **Forbind GitHub** og følg vejledningen: lav et *fine-grained* token
+   på https://github.com/settings/personal-access-tokens/new, giv det kun
+   adgang til **Jarvis**, og sæt **Contents** og **Actions** til **Read and
+   write**.
+2. Sæt tokenet ind. Det gemmes kun i den browser, du bruger, og sendes kun til
+   GitHub. Det kan slettes igen med **Afbryd**, og helt trækkes tilbage på
+   GitHubs tokenside.
+
+Derefter kan du:
+
+- **Tilføje en kunstner**: navn med almindelige bogstaver, navnet som
+  kunstneren selv skriver det (med specialtegn), flere stavemåder, en dato at
+  søge fra og eventuelt SoundCloud-profil og YouTube-kanal.
+- **Rette en kunstner**: alt det samme, og **Fjern overvågning** (to tryk).
+- **Flytte datoen**, der søges fra: tryk på **Udgivet efter** i toppen af siden
+  eller **Ret** i listen. Hurtigvalg: *Fra nu*, *7 dage*, *30 dage*, *1 år*.
+  Flyttes datoen tilbage, søger næste scanning længere tilbage (op til 150
+  resultater pr. søgning) og vurderer de ældre uploads. Flyttes den frem,
+  forsvinder sæt fra før den nye dato. En scanning bruger højst 15 minutter
+  på at vurdere uploads (`judgeBudgetMinutes`); er der flere, tager de
+  næste scanninger resten, nyeste først, og siden skriver *Søger stadig
+  længere tilbage* imens.
+- **Tjek nu**: starter en scanning med det samme.
+
+Hver ændring gemmes som en ændring af `config/artists.json` i repoet. Det
+starter en scanning af sig selv, og appen viser, hvordan den går
+(*I kø*, *Scanner*, *Opdateret*). Efter et par minutter står de nye data på
+siden. Gemmer to enheder samtidig, læser appen filen igen og lægger sin
+ændring oven i den anden.
+
+Den side, der er online, bliver kun skiftet ud, når alle browser-selvtests er
+bestået. Fejler de, bliver den forrige version liggende, så appen altid kan
+åbnes.
+
+## Tilføj en kunstner i filen
+
+Det samme kan gøres direkte i [`config/artists.json`](config/artists.json).
+Tilføj et objekt mere i `artists`:
 
 ```json
 {
@@ -177,7 +217,9 @@ et objekt mere i `artists`:
   `"youtube.com/@kunstner"`.
 
 Når der er flere kunstnere, får siden et kunstnerfilter. Fælles indstillinger
-(minimumslængde, minimumsscore, kendte platforme) står øverst i samme fil.
+(minimumslængde, minimumsscore, kendte platforme) står øverst i samme fil. Er
+en kunstner skrevet forkert ind, bliver den sprunget over med en besked øverst
+på siden, mens de andre scannes som normalt.
 
 ---
 
@@ -191,7 +233,10 @@ tracker/                   scanneren (Python): søger, vurderer, skriver data
   quality.py               lydmåling (ffmpeg + numpy) og scoren
   pipeline.py              selve kørslen og filerne
 web/                       siden: index.html, assets/, data/
+  assets/app.js            visningen af sæt, hørt-markeringer, filtre
+  assets/admin.js          "Overvågninger": ændringer gemmes via GitHubs API
 tests/                     selvtests for scanner og side
+  fixtures/artists.json    fast kopi af opsætningen, som testene bruger
 .github/workflows/set-tracker.yml   kører scanneren hver anden time
 ```
 
@@ -212,11 +257,17 @@ python -m http.server 8766 --directory web
 `web/index.html` kan også åbnes direkte fra disken; så hentes de nyeste data
 fra grenen `set-tracker-data`.
 
-Browser-selvtesten (`tests/ui_check.mjs`) kører siden i Chromium i iPhone- og
-desktopstørrelse, lyst og mørkt tema, og fejler ved scriptfejl, vandret
-scroll, afklippet tekst, elementer der stikker ud, eller knapper der ikke gør
-det, de siger:
+Browser-selvtestene kører siden i Chromium i iPhone- og desktopstørrelse, lyst
+og mørkt tema, og fejler ved scriptfejl, vandret scroll, afklippet tekst,
+elementer der stikker ud, eller knapper der ikke gør det, de siger.
+`tests/ui_check.mjs` dækker visningen af sæt, `tests/ui_admin.mjs` dækker
+**Overvågninger** mod en stand-in for GitHubs API (tokens, konflikter,
+manglende rettigheder, kørsler) og tjekker præcis, hvad der skrives til
+opsætningsfilen:
 
 ```bash
-npm i playwright && node tests/ui_check.mjs
+npm i playwright && node tests/ui_check.mjs && node tests/ui_admin.mjs
 ```
+
+Testene bruger en fast kopi af opsætningen (`tests/fixtures/artists.json`),
+så ændringer i appen aldrig kan få dem til at fejle.

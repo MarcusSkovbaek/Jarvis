@@ -184,7 +184,7 @@ def youtube_channel_ytdlp(channel, limit):
     return [from_ytdlp(e) for e in _flat_list(url, limit) if _is_video(e)]
 
 
-def soundcloud_search(query, limit):
+def soundcloud_search(query, limit, since_iso=None):
     """Newest uploads first when possible, then SoundCloud's own relevance order.
 
     SoundCloud ranks search results by popularity, so a set uploaded an hour
@@ -193,10 +193,12 @@ def soundcloud_search(query, limit):
     into its search extractor and falls back quietly if that ever changes.
     """
     results, seen = [], set()
-    try:
-        results += _soundcloud_recent(query, limit)
-    except Exception:
-        pass
+    window = _soundcloud_window(since_iso)
+    if window:
+        try:
+            results += _soundcloud_recent(query, limit, window)
+        except Exception:
+            pass
     results += [from_ytdlp(e) for e in _flat_list(f"scsearch{limit}:{query}", limit)]
     out = []
     for it in results:
@@ -206,7 +208,23 @@ def soundcloud_search(query, limit):
     return out
 
 
-def _soundcloud_recent(query, limit):
+def _soundcloud_window(since_iso):
+    """SoundCloud's own date filter that still covers the start date (None: no filter)."""
+    if not since_iso:
+        return "last_month"
+    try:
+        since = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return "last_month"
+    age = datetime.now(timezone.utc) - (since if since.tzinfo else since.replace(tzinfo=timezone.utc))
+    if age.days < 28:
+        return "last_month"
+    if age.days < 360:
+        return "last_year"
+    return None
+
+
+def _soundcloud_recent(query, limit, window="last_month"):
     import itertools
 
     yt_dlp = _ydl()
@@ -214,7 +232,7 @@ def _soundcloud_recent(query, limit):
         ie = ydl.get_info_extractor("SoundcloudSearch")
         ie.initialize()
         entries = ie._get_collection("search/tracks", query, limit=min(limit, 50), q=query,
-                                     **{"filter.created_at": "last_month"})
+                                     **{"filter.created_at": window})
         return [from_ytdlp(e) for e in itertools.islice(entries, limit) if e]
 
 
@@ -324,12 +342,19 @@ def from_api_video(v):
 
 
 def youtube_search_api(query, limit, since_iso, key):
-    data = _api_get("search", {
-        "part": "id", "q": query, "type": "video", "order": "date",
-        "maxResults": min(limit, 50), "publishedAfter": since_iso,
-    }, key)
-    ids = [it["id"]["videoId"] for it in data.get("items", []) if it.get("id", {}).get("videoId")]
-    return youtube_videos_api(ids, key)
+    """Newest videos after the start date; pages of 50 until the limit (each page costs 100 units)."""
+    ids, token = [], None
+    while len(ids) < limit:
+        params = {"part": "id", "q": query, "type": "video", "order": "date",
+                  "maxResults": min(limit - len(ids), 50), "publishedAfter": since_iso}
+        if token:
+            params["pageToken"] = token
+        data = _api_get("search", params, key)
+        ids += [it["id"]["videoId"] for it in data.get("items", []) if it.get("id", {}).get("videoId")]
+        token = data.get("nextPageToken")
+        if not token:
+            break
+    return youtube_videos_api(ids[:limit], key)
 
 
 def youtube_videos_api(ids, key):

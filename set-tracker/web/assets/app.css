@@ -264,6 +264,12 @@ a { color: inherit; }
   white-space: nowrap;
 }
 .scan__text { overflow: hidden; text-overflow: ellipsis; }
+.scan__short { display: none; font-variant-numeric: tabular-nums; }
+/* Two buttons and the name leave little room on phones: the LED and the time say enough. */
+@media (max-width: 430px) {
+  .scan__text { display: none; }
+  .scan__short { display: inline; }
+}
 @media (hover: hover) { .scan:hover { background: var(--panel-2); color: var(--ink); } }
 
 .led {
@@ -717,6 +723,7 @@ a { color: inherit; }
 .btn--play { min-width: 0; background: var(--accent-fill); color: var(--accent-ink); }
 .btn--play span { overflow: hidden; text-overflow: ellipsis; }
 @media (hover: hover) { .btn--play:hover { filter: brightness(1.06); } }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.5; cursor: default; transform: none; filter: none; }
 .set[data-heard] .btn--play {
   background: transparent;
   color: var(--ink);
@@ -982,6 +989,280 @@ a { color: inherit; }
   animation: shimmer 1.4s linear infinite;
 }
 
+/* -------------------------------------------------------------- the sheet */
+
+/* "Overvågninger": a bottom sheet on phones, a centred panel on wider screens. */
+html.has-sheet { overflow: hidden; }
+
+.sheet {
+  width: 100%;
+  max-width: 100%;
+  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 16px);
+  margin: auto 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 22px 22px 0 0;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 -18px 60px -20px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.sheet[open] { display: flex; animation: sheet-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.sheet::backdrop { background: rgba(6, 7, 10, 0.55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+
+@media (min-width: 720px) {
+  .sheet {
+    width: min(620px, calc(100% - 32px));
+    max-height: 86dvh;
+    margin: auto;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.65);
+  }
+  .sheet[open] { animation-name: sheet-pop; }
+}
+
+.sheet__panel { display: flex; flex-direction: column; width: 100%; min-height: 0; max-height: inherit; }
+.sheet__head {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+/* The grab handle a bottom sheet has on phones. */
+.sheet__head::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+@media (min-width: 720px) { .sheet__head::before { display: none; } .sheet__head { padding-top: 14px; } }
+.sheet__title {
+  grid-column: 2;
+  margin: 0;
+  text-align: center;
+  font-family: var(--display);
+  font-stretch: 112%;
+  font-weight: 750;
+  font-size: 1.125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Takes focus when the control that had it goes away; no ring for that. */
+.sheet__title:focus, .sheet__title:focus-visible { outline: none; }
+#manage-back { grid-column: 1; }
+#manage-close { grid-column: 3; }
+.icon-btn--plain { border-color: transparent; background: transparent; }
+@media (hover: hover) { .icon-btn--plain:hover { background: var(--panel-2); } }
+
+.sheet__body {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 20px calc(26px + env(safe-area-inset-bottom, 0px));
+}
+
+.sheet__lead, .sheet__note, .sheet__card p { margin: 0; color: var(--ink-2); }
+.sheet__note { font-size: var(--step--1); }
+.sheet__card {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.sheet__account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; color: var(--ink-2); font-size: var(--step--1); }
+.sheet__error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border-left: 3px solid var(--bad);
+  background: var(--panel-2);
+  color: var(--ink);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+.sheet__error-slot:empty { display: none; }
+.sheet__follow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: var(--step--1);
+}
+/* The light sits on the first line of the text, however many lines it takes. */
+.sheet__follow .led { margin-top: calc((1.5em - 8px) / 2); }
+.sheet__follow a { grid-column: 2; justify-self: start; color: var(--accent); font-weight: 600; }
+.sheet__actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.sheet__actions .btn--play { flex: 1 1 auto; }
+.sheet__danger { padding-top: 16px; border-top: 1px solid var(--line); }
+
+.linklike {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.monitors { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.monitor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.monitor--loading { display: block; color: var(--ink-3); font-size: var(--step--1); }
+.monitor__main { display: grid; gap: 3px; min-width: 0; justify-items: start; }
+.monitor__name {
+  font-family: var(--display);
+  font-stretch: 118%;
+  font-weight: 800;
+  font-size: 1.0625rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.monitor__sub { color: var(--ink-2); font-size: var(--step--1); }
+.monitor__meta { color: var(--ink-3); font-size: 0.75rem; }
+.monitor__note { margin-top: 2px; color: var(--ink-2); font-size: 0.75rem; font-weight: 500; }
+.tag--wait { margin-top: 4px; border: 1px solid var(--line-strong); color: var(--ink-2); font-weight: 600; }
+
+.btn--danger { background: transparent; border-color: var(--line-strong); color: var(--bad); }
+.btn--danger.is-armed { background: var(--bad); border-color: var(--bad); color: var(--panel); }
+
+/* Form */
+.sheet__form { display: grid; gap: 20px; }
+.field { display: grid; gap: 7px; min-width: 0; }
+.field > label { font-size: var(--step--1); font-weight: 600; color: var(--ink); }
+.field input {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;           /* 16 px: iOS does not zoom into the field */
+  -webkit-appearance: none;
+  appearance: none;
+}
+.field input::placeholder { color: var(--ink-3); }
+.field input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: transparent; }
+.field input[type="datetime-local"] { text-align: left; }
+.field input[type="datetime-local"]::-webkit-date-and-time-value { text-align: left; }
+.field__hint { margin: 0; color: var(--ink-3); font-size: 0.78rem; }
+.since__echo { margin: 0; color: var(--ink); font-size: var(--step--1); font-weight: 500; }
+.since__echo::first-letter { text-transform: uppercase; }
+.field__error { margin: 0; color: var(--bad); font-size: 0.8125rem; font-weight: 600; }
+.field--error input { border-color: var(--bad); }
+
+.names, .since { display: grid; gap: 10px; min-width: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 3px 4px 3px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  font-size: var(--step--1);
+  font-weight: 500;
+}
+.chip > span { overflow-wrap: anywhere; }
+.chip__x {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+@media (hover: hover) { .chip__x:hover { color: var(--ink); background: var(--panel-2); } }
+.chips__add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.chips__add .btn { min-height: 46px; }
+
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.preset {
+  min-height: 34px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--step--1);
+  font-weight: 500;
+  cursor: pointer;
+}
+@media (hover: hover) { .preset:hover { color: var(--ink); border-color: var(--line-strong); } }
+
+.steps { display: grid; gap: 8px; margin: 0; padding-left: 1.2em; color: var(--ink-2); font-size: var(--step--1); }
+.steps a { color: var(--accent); font-weight: 600; }
+.steps b { color: var(--ink); font-weight: 600; }
+
+/* The start date in the plate doubles as the way to change it. */
+.criteria li.criteria__start { padding: 0; border: 0; background: none; }
+.criteria__edit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 9px 5px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.criteria__edit b {
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  color: var(--ink-3);
+}
+.criteria__edit .icon { align-self: center; width: 12px; height: 12px; color: var(--ink-3); }
+@media (hover: hover) { .criteria__edit:hover { border-color: var(--line-strong); color: var(--ink); } }
+
+.notice .linklike { font-size: inherit; }
+
 /* ------------------------------------------------------------------ motion */
 
 @keyframes rise { from { transform: translateY(8px); opacity: 0.35; } to { transform: none; opacity: 1; } }
@@ -990,6 +1271,8 @@ a { color: inherit; }
 @keyframes draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
 @keyframes sweep { from { left: -80px; } to { left: 100%; } }
 @keyframes shimmer { to { background-position: -300% 0; } }
+@keyframes sheet-in { from { transform: translateY(40px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+@keyframes sheet-pop { from { transform: translateY(10px) scale(0.98); opacity: 0.6; } to { transform: none; opacity: 1; } }
 @keyframes toast-in { from { transform: translate(-50%, 12px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
