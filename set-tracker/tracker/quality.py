@@ -23,6 +23,8 @@ from pathlib import Path
 import numpy as np
 
 BASE = 62
+# The most the sound analysis can add (full frequency range +12, full bass +3).
+MAX_ANALYSIS_BONUS = 15
 SAMPLE_RATE = 44100
 
 # Bits per second buy different amounts of quality in different codecs.

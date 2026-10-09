@@ -94,7 +94,8 @@
       "subtitle": "",
       "trackingSince": "2026-10-01T18:50:00Z",
       "searchNames": [
-        "WORSHIP"
+        "WORSHIP",
+        "WORSHIP drum and bass"
       ],
       "sources": {
         "youtube": {
@@ -108,7 +109,28 @@
       },
       "links": {
         "youtube": "https://www.youtube.com/results?search_query=WORSHIP&sp=CAI%253D"
-      }
+      },
+      "mustMention": [
+        "Sub Focus",
+        "Dimension",
+        "Culture Shock",
+        "1991",
+        "drum and bass",
+        "dnb",
+        "d&b"
+      ],
+      "exclude": [
+        "praise",
+        "prayer",
+        "church",
+        "gospel",
+        "christian",
+        "jesus",
+        "hymn",
+        "hymns",
+        "sermon",
+        "communion"
+      ]
     },
     {
       "id": "sub-focus",

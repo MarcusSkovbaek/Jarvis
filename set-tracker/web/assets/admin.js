@@ -24,6 +24,7 @@
   var POLL_MS = window.SET_TRACKER_POLL_MS || 8000;
   var DAY = 864e5;
   var MAX_NAMES = 8;            // spellings per artist; each is one YouTube search per scan
+  var MAX_WORDS = 25;           // words in each title filter
   var READ_ONLY = ST.demo;      // the example view, and the preview, never write anywhere
 
   var body = document.getElementById("manage-body");
@@ -49,7 +50,8 @@
     pendingFocus: false,
     formSha: null,      // the version of the file the form was filled from
     dirty: false,       // something typed or picked in the form since
-    dispatching: false
+    dispatching: false,
+    why: null           // "scan": the connect view was opened to start a scan
   };
 
   /* --------------------------------------------------------------- auth */
@@ -284,6 +286,7 @@
   function open(view, opts) {
     opts = opts || {};
     if (!dialog.open) A.opener = document.activeElement;
+    A.why = opts.why || null;
     A.error = null;
     A.confirmRemove = false;
     if ((view === "form") && (READ_ONLY || !A.auth)) view = READ_ONLY ? "list" : "connect";
@@ -403,7 +406,7 @@
       else if (old) old.remove();
       else if (box) append(body, box);
       var scan = body.querySelector("[data-act=scan-now]");
-      if (scan) scan.disabled = scanning() || A.busy || A.dispatching;
+      if (scan) scan.disabled = A.busy || A.dispatching;
     });
   }
 
@@ -455,7 +458,7 @@
     if (A.auth && !READ_ONLY) {
       append(body, el("div", { class: "sheet__actions" },
         el("button", { class: "btn btn--play", type: "button", "data-act": "add", disabled: A.busy || A.loading }, icon("plus", "icon--s"), el("span", { text: "Tilføj overvågning" })),
-        el("button", { class: "btn btn--quiet", type: "button", "data-act": "scan-now", disabled: scanning() || A.busy || A.dispatching, text: "Tjek nu" })));
+        el("button", { class: "btn btn--quiet", type: "button", "data-act": "scan-now", disabled: A.busy || A.dispatching, text: "Scan nu" })));
     }
     append(body, followBox());
   }
@@ -494,7 +497,11 @@
       if (inputEl) { if (msg) inputEl.setAttribute("aria-invalid", "true"); else inputEl.removeAttribute("aria-invalid"); }
     });
     var first = body.querySelector("[aria-invalid=true]");
-    if (first) first.focus();
+    if (first) {
+      var folded = first.closest("details");
+      if (folded) folded.open = true;
+      first.focus();
+    }
   }
 
   function input(attrs) {
@@ -531,12 +538,13 @@
       "Med specialtegn, fx ¥ØU$UK€ ¥UK1MAT$U. Vises som overskrift."));
 
     var nameInput = input({ name: "extra", placeholder: "fx YØU$UK€ YUK1MAT$U eller 行松陽介", maxlength: "80", enterkeyhint: "done" });
+    var must = (a && a.mustMention) || [], skip = (a && a.exclude) || [];
     var namesGroup = el("div", { class: "names" },
       el("ul", { class: "chips", id: "f-names-list", "aria-label": "Andre stavemåder" }),
       el("div", { class: "chips__add" }, nameInput,
         el("button", { class: "btn btn--quiet", type: "button", "data-act": "add-name", text: "Tilføj" })));
-    append(form, field("names", "f-extra", "Andre stavemåder der søges på", namesGroup,
-      "Navnene ovenfor søges altid. Hver stavemåde søges på både YouTube og SoundCloud.", nameInput));
+    append(form, field("names", "f-extra", "Andre stavemåder og søgninger", namesGroup,
+      "Navnene ovenfor søges altid. Hver linje her søges også på YouTube og SoundCloud, fx en anden stavemåde eller “WORSHIP drum and bass”.", nameInput));
 
     var since = input({ name: "since", type: "datetime-local", required: true,
       value: toLocalInput(a ? a.trackingSince : new Date().toISOString()) });
@@ -556,6 +564,18 @@
     append(form, field("youtube", "f-youtube", "YouTube-kanal (valgfrit)",
       input({ name: "youtube", value: ((src.youtube || {}).channels || []).join(", "), placeholder: "@kanal eller link", inputmode: "url" }),
       "Kanalens nyeste videoer gennemgås ved hver scanning."));
+
+    // For names that are also ordinary words ("WORSHIP"): folded away unless in use.
+    append(form, el("details", { class: "more", id: "f-more", open: must.length || skip.length ? true : null },
+      el("summary", null, el("span", { text: "Undgå forkerte fund" }), el("span", { class: "more__hint", text: "valgfrit" })),
+      el("div", { class: "more__body" },
+        el("p", { class: "field__hint", text: "Til navne, der også er almindelige ord. Skriv ord eller navne adskilt af komma." }),
+        field("must", "f-must", "Skal også nævne",
+          input({ name: "must", value: must.join(", "), placeholder: "fx Sub Focus, Dimension, drum and bass", maxlength: "600" }),
+          "Et fund tæller kun, hvis titlen eller uploaderen også nævner ét af disse. Kunstnerens egne profiler og kendte platforme som Boiler Room tæller altid."),
+        field("exclude", "f-exclude", "Udelad titler med",
+          input({ name: "exclude", value: skip.join(", "), placeholder: "fx praise, prayer, church", maxlength: "600" }),
+          "Fund, hvis titel nævner et af disse ord, springes over."))));
 
     append(form, el("div", { class: "sheet__error-slot", id: "f-error" }));
     append(form, el("div", { class: "sheet__actions" },
@@ -611,7 +631,9 @@
       el("li", null, "Under ", el("b", { text: "Repository access" }), " vælger du ", el("b", { text: "Only select repositories" }), " og ", el("b", { text: REPO.split("/")[1] || "repoet" }), "."),
       el("li", null, "Under ", el("b", { text: "Permissions" }), ": ", el("b", { text: "Contents" }), " og ", el("b", { text: "Actions" }), " sættes til ", el("b", { text: "Read and write" }), "."),
       el("li", null, "Tryk ", el("b", { text: "Generate token" }), ", kopiér det og sæt det ind herunder."));
-    append(body, el("p", { class: "sheet__lead", text: "Sætradaren gemmer overvågninger direkte i dit GitHub-repo. Det kræver et adgangstoken, der kun gælder dét repo." }));
+    append(body, el("p", { class: "sheet__lead", text: A.why === "scan"
+      ? "Scanningerne kører på GitHub. For at starte én herfra skal appen forbindes til dit GitHub-repo én gang med et adgangstoken, der kun gælder dét repo. Bagefter starter scanningen med det samme."
+      : "Sætradaren gemmer overvågninger direkte i dit GitHub-repo. Det kræver et adgangstoken, der kun gælder dét repo." }));
     append(body, steps);
     var form = el("form", { class: "sheet__form", novalidate: true });
     append(form, field("token", "f-token", "Token", input({ name: "token", type: "password", placeholder: "github_pat_…" }),
@@ -648,7 +670,18 @@
     if (v.names.length > MAX_NAMES) errors.names = "Højst " + MAX_NAMES + " stavemåder i alt (hver koster en søgning pr. scanning).";
     v.users = uniqueNames(v.users);
     v.channels = uniqueNames(v.channels);
+    v.must = uniqueNames(splitPhrases(f.elements.must.value));
+    v.exclude = uniqueNames(splitPhrases(f.elements.exclude.value));
+    [["must", v.must], ["exclude", v.exclude]].forEach(function (pair) {
+      if (pair[1].length > MAX_WORDS) errors[pair[0]] = "Højst " + MAX_WORDS + " ord eller navne.";
+      else if (pair[1].some(function (w) { return w.length > 60; })) errors[pair[0]] = "Adskil ordene med komma (højst 60 tegn hver).";
+    });
     return { value: v, errors: errors };
+  }
+
+  // "Sub Focus, drum and bass; dnb" -> ["Sub Focus", "drum and bass", "dnb"]
+  function splitPhrases(text) {
+    return String(text || "").split(/[,;\n]+/).map(function (x) { return x.trim().replace(/\s+/g, " "); }).filter(Boolean);
   }
 
   function addPendingName() {
@@ -680,6 +713,8 @@
     if (!artist.subtitle || artist.subtitle === oldName) artist.subtitle = artist.displayName !== artist.name ? artist.name : "";
     artist.trackingSince = isoUTC(v.since);
     artist.searchNames = v.names;
+    if (v.must.length) artist.mustMention = v.must; else delete artist.mustMention;
+    if (v.exclude.length) artist.exclude = v.exclude; else delete artist.exclude;
     artist.sources = artist.sources || {};
     artist.sources.youtube = Object.assign({ searchQueries: [] }, artist.sources.youtube, { channels: v.channels });
     artist.sources.soundcloud = Object.assign({ searchQueries: [] }, artist.sources.soundcloud, { users: v.users });
@@ -791,7 +826,9 @@
       A.busy = false;
       notify("Forbundet som " + A.auth.login);
       render(true);
+      syncPage();
       loadConfig(true);
+      if (A.why === "scan") { A.why = null; scanNow(); }
     } catch (e) {
       A.error = e.message;
     } finally {
@@ -821,10 +858,19 @@
     if (!expired) notify("Afbrudt. Tokenet er slettet fra denne browser.");
     A.view = expired ? "connect" : "list";
     render(true);
+    syncPage();
   }
 
+  // The page's refresh button and "Scan nu" depend on the connection.
+  function syncPage() { if (ST.state.data) ST.render(); }
+
+  // Starts a scan on GitHub now, also while another one runs: GitHub queues
+  // it and runs it next. From the page (top bar, "Scan nu") as well as here.
   async function scanNow() {
-    if (A.dispatching || scanning()) return;
+    if (READ_ONLY) return;
+    if (!A.auth) { open("connect", { why: "scan" }); return; }
+    if (A.dispatching) return;
+    var queued = scanning();
     A.dispatching = true;
     A.error = null;
     refreshFollow();
@@ -833,13 +879,22 @@
       var after = Date.now();
       await gh("/repos/" + REPO + "/actions/workflows/" + encodeURIComponent(WORKFLOW) + "/dispatches", { method: "POST", body: { ref: b } });
       A.dispatching = false;
-      notify("Scanning startet.");
+      notify(queued ? "Scanning sat i kø: den starter, når den igangværende er færdig." : "Scanning startet.");
       follow({ after: after, event: "workflow_dispatch" });
     } catch (e) {
       A.dispatching = false;
-      A.error = e.status === 403 ? "Tokenet må ikke starte scanninger. Giv det “Actions: Read and write”." : e.message;
-      if (e.status === 401) disconnect(true);
-      else render();
+      var text = e.status === 403 ? "Tokenet må ikke starte scanninger. Giv det “Actions: Read and write”." : e.message;
+      if (e.status === 401) {
+        A.error = e.message;
+        disconnect(true);
+        if (!dialog.open) ST.toast("GitHub afviste tokenet. Forbind igen under Overvågninger.");
+      } else if (dialog.open) {
+        A.error = text;
+        render();
+      } else {
+        refreshFollow();
+        ST.toast(text);
+      }
     }
   }
 
@@ -953,6 +1008,7 @@
   document.getElementById("manage-close").addEventListener("click", close);
   backBtn.addEventListener("click", function () {
     A.view = "list";
+    A.why = null;
     A.error = null;
     A.confirmRemove = false;
     render(true);
@@ -969,7 +1025,7 @@
     else if (act === "disconnect") disconnect(false);
     else if (act === "add") { A.view = "form"; startForm(null, null); A.pendingFocus = true; render(true); focusFirst(); }
     else if (act === "edit") { A.view = "form"; startForm(b.getAttribute("data-id"), null); A.pendingFocus = true; render(true); focusFirst(); }
-    else if (act === "cancel") { A.view = "list"; A.error = null; render(true); }
+    else if (act === "cancel") { A.view = "list"; A.why = null; A.error = null; render(true); }
     else if (act === "add-name") addPendingName();
     else if (act === "drop-name") dropName(Number(b.getAttribute("data-index")));
     else if (act === "preset") {
@@ -998,9 +1054,22 @@
   });
 
   body.addEventListener("input", function (e) {
-    if (A.view === "form" && e.target && e.target.form) A.dirty = true;
+    if (A.view !== "form" || !e.target || !e.target.form) return;
+    A.dirty = true;
+    // A field's error goes as soon as it is being corrected.
+    var f = e.target.closest(".field--error");
+    if (f) {
+      f.classList.remove("field--error");
+      var err = f.querySelector(".field__error");
+      if (err) { err.hidden = true; err.textContent = ""; }
+      e.target.removeAttribute("aria-invalid");
+    }
   });
 
   // Tests and the preview use this; it never holds the token.
-  ST.admin = { open: open, close: close, state: function () { return { view: A.view, connected: !!A.auth, following: !!A.follow }; } };
+  ST.admin = {
+    open: open, close: close, scanNow: scanNow,
+    connected: function () { return !!A.auth && !READ_ONLY; },
+    state: function () { return { view: A.view, connected: !!A.auth, following: !!A.follow }; }
+  };
 })();

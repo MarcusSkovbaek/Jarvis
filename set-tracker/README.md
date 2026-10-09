@@ -89,6 +89,7 @@ Scoren starter på 62 og flyttes op og ned af det, der bliver fundet. Under
 | Fyldig bas | +3 |
 | God/høj bitrate | +3 / +4 |
 | Titlen siger "phone", "crowd recording", "snippet", "interview", … | −30 til −45 |
+| Kunstneren nævnes kun efter "feat." i et mix eller en lang navneliste (en anden DJ's mix) | −45 |
 | Lyden stopper under 10 kHz (mudret) / under 13 kHz | −40 / −15 |
 | Svag bas (typisk telefon i et lokale) | −15 |
 | Digital forvrængning (clipping) | −8 til −25 |
@@ -106,7 +107,27 @@ Genuploads af ældre sæt bliver sorteret fra. Lægges samme sæt både på YouT
 og SoundCloud, vises det én gang med et "Også på"-link.
 
 Alt det, der blev fundet men ikke levede op til kravene, ligger under
-**Frasorteret** med begrundelsen.
+**Frasorteret** med begrundelsen. Udelukker titlen alene et fund (et
+interview, et klip, en anden DJ's mix), bliver lyden ikke målt, og et sæt,
+der blev godkendt før en titelregel fandtes, bliver vurderet igen.
+
+### Navne, der også er almindelige ord
+
+Hedder kunstneren noget, der også er et almindeligt ord (fx **WORSHIP**,
+der ellers fanger lovsang og gudstjenester), har hver kunstner to valgfrie
+filtre under **Undgå forkerte fund** i appen:
+
+- **Skal også nævne** (`mustMention`): et fund tæller kun, hvis titlen eller
+  uploaderen også nævner ét af ordene, fx `Sub Focus, Dimension, drum and
+  bass`. Kunstnerens egne profiler og kendte platforme tæller altid.
+- **Udelad titler med** (`exclude`): fund, hvis titel nævner et af ordene,
+  springes over, fx `praise, prayer, church`.
+
+Ordene matches som hele ord uden hensyn til store/små bogstaver, og "and" og
+"&" regnes for det samme. Ændres filtrene, forsvinder sæt, de nu udelukker,
+og fund, de før sprang over, bliver vurderet igen. En ekstra søgning som
+"WORSHIP drum and bass" under **Andre stavemåder og søgninger** hjælper
+desuden med at finde de rigtige sæt blandt alle de andre.
 
 ---
 
@@ -121,7 +142,9 @@ stavemåde finder uploads, de andre overser.
 Derfor har hver kunstner en liste `searchNames`. Hver stavemåde på listen
 bliver søgt på **både YouTube og SoundCloud** ved hver scanning, og titler
 med en hvilken som helst af dem tæller som et match. Siden viser listen under
-**Søger efter**. Genkendelsen i titler tager desuden selv højde for
+**Søger efter**: tryk på en stavemåde for at åbne samme søgning på YouTube
+eller SoundCloud. Under **Kilder ved seneste tjek** nederst på siden er hver
+søgning et link til søgningen på platformen. Genkendelsen i titler tager desuden selv højde for
 store/små bogstaver, fuldbredde-tegn og "leetspeak" (`¥` for Y, `$` for S,
 `1` for I, `€` for E), så også fx "Yousuke Yuk1matsu" bliver fundet.
 
@@ -157,7 +180,10 @@ Derefter kan du:
   på at vurdere uploads (`judgeBudgetMinutes`); er der flere, tager de
   næste scanninger resten, nyeste først, og siden skriver *Søger stadig
   længere tilbage* imens.
-- **Tjek nu**: starter en scanning med det samme.
+- **Scan nu**: starter en scanning på GitHub med det samme. Den findes også
+  nederst på siden ved **Kilder**, og når appen er forbundet, gør knappen
+  ↻ i toppen det samme. Kører der allerede en scanning, sættes den nye i kø
+  og starter bagefter.
 
 Hver ændring gemmes som en ændring af `config/artists.json` i repoet. Det
 starter en scanning af sig selv, og appen viser, hvordan den går
@@ -215,6 +241,8 @@ Tilføj et objekt mere i `artists`:
   gennemgås direkte.
 - `ownAccounts` (valgfri): andre konti, der hører til kunstneren, fx
   `"youtube.com/@kunstner"`.
+- `mustMention` og `exclude` (valgfri): filtre for navne, der også er
+  almindelige ord. Se [Navne, der også er almindelige ord](#navne-der-også-er-almindelige-ord).
 
 Når der er flere kunstnere, får siden et kunstnerfilter. Fælles indstillinger
 (minimumslængde, minimumsscore, kendte platforme) står øverst i samme fil. Er

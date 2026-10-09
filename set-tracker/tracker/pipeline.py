@@ -19,6 +19,7 @@ import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote, quote_plus
 
 from . import matching, quality, sources
 from .sources import SourceError
@@ -28,6 +29,8 @@ CONFIG_PATH = ROOT / "config" / "artists.json"
 DATA_DIR = ROOT / "web" / "data"
 
 FINAL = ("accepted", "rejected", "duplicate")
+# Title rules about what an upload is, rather than how it sounds.
+CONTENT_CODES = {"partial", "talk", "support", "reaction", "featured"}
 LIVE = ("is_live", "is_upcoming", "post_live")
 PLATFORM_NAMES = {"youtube": "YouTube", "soundcloud": "SoundCloud"}
 
@@ -183,6 +186,23 @@ def job_key(artist, platform, kind, value):
     return f"{artist['id']}:{platform}:{kind}:{value}"
 
 
+def job_url(platform, kind, value):
+    """The page on the platform's own site that shows what a search or profile finds."""
+    if platform == "youtube" and kind == "search":
+        return f"https://www.youtube.com/results?search_query={quote_plus(value)}&sp=CAI%253D"   # newest first
+    if platform == "soundcloud" and kind == "search":
+        return f"https://soundcloud.com/search/sounds?q={quote(value)}"
+    if value.startswith("http"):
+        base = value
+    elif platform == "youtube":
+        # "@name", "channel/UC…" or a bare channel id "UC…"
+        bare_id = value.startswith("UC") and "/" not in value and len(value) >= 20
+        base = "https://www.youtube.com/" + ("channel/" + value if bare_id else value.lstrip("/"))
+    else:
+        base = "https://soundcloud.com/" + value
+    return base.rstrip("/") + ("/videos" if platform == "youtube" else "/tracks")
+
+
 class Scanner:
     def __init__(self, config, state, data, fetcher, now=None, log=print, clock=time.monotonic):
         self.config = config
@@ -221,6 +241,8 @@ class Scanner:
         self.budget = float(self.settings.get("judgeBudgetMinutes", 15)) * 60
         self.deferred = {}
         self.deep_pending = set(state.get("deepPending", []))
+        # The title filters (mustMention, exclude) each artist was scanned with.
+        self.filter_state = state.setdefault("filters", {})
 
     # -- helpers ------------------------------------------------------------
 
@@ -244,11 +266,12 @@ class Scanner:
             "artistId": artist["id"], "reason": reason,
             "title": item.get("title", "")[:200], "durationSec": item.get("durationSec"),
             "publishedAt": item.get("publishedAt"), "precision": item.get("publishedPrecision"),
-            "url": item.get("url"), "at": iso(self.now),
+            "url": item.get("url"), "uploader": item.get("uploader", "")[:100], "uploaderUrl": item.get("uploaderUrl"),
+            "at": iso(self.now),
         }
 
     def _jobs(self, artist, limit=None):
-        """(platform, label, key, fetch) for every search, channel and profile."""
+        """(platform, label, key, url, fetch) for every search, channel and profile."""
         since = iso(parse_time(artist["trackingSince"]))
         n = limit or self.limit
         fetch = {
@@ -261,9 +284,54 @@ class Scanner:
                   ("soundcloud", "search"): "SoundCloud-søgning “{}”", ("soundcloud", "user"): "SoundCloud-profil {}"}
         for platform, kind, value in job_specs(artist):
             yield (platform, labels[(platform, kind)].format(value), job_key(artist, platform, kind, value),
-                   lambda f=fetch[(platform, kind)], v=value: f(v))
+                   job_url(platform, kind, value), lambda f=fetch[(platform, kind)], v=value: f(v))
+
+    def _filters(self, artist):
+        def words(key):
+            return [w.strip() for w in artist.get(key) or [] if isinstance(w, str) and w.strip()]
+        return words("mustMention"), words("exclude")
+
+    def passes_filters(self, artist, item):
+        """The artist's own title filters, for names that are also common words.
+
+        `exclude`: a title naming any of these is skipped ("praise", "church" for
+        WORSHIP). `mustMention`: the title or uploader must also name one of
+        these ("Sub Focus", "drum and bass"), unless the upload is the artist's
+        own or comes from a known platform such as Boiler Room.
+        """
+        must, exclude = self._filters(artist)
+        title = item.get("title", "")
+        if any(matching.mentions(title, w) for w in exclude):
+            return False
+        if not must or self._own(artist, item) or matching.is_trusted_uploader(item.get("uploader", ""), self.trusted):
+            return True
+        text = f"{title} {item.get('uploader', '')}"
+        return any(matching.mentions(text, w) for w in must)
 
     # -- judging ------------------------------------------------------------
+
+    def _metadata(self, item, artist):
+        """(own, trusted, signals, content signals) from everything but the sound."""
+        own = self._own(artist, item)
+        trusted = not own and matching.is_trusted_uploader(item.get("uploader", ""), self.trusted)
+        titled = matching.title_signals(item.get("title", ""))
+        if not own:
+            titled += matching.credit_signals(item.get("title", ""), self._aliases(artist))
+        signals = quality.metadata_signals(item, trusted, own, titled)
+        content = sorted((s for s in signals if s["code"] in CONTENT_CODES), key=lambda s: s["impact"])
+        return own, trusted, signals, content
+
+    def _ruled_out(self, signals, content):
+        # Even the best possible sound could not lift it to the minimum score.
+        return bool(content) and quality.score(signals) + quality.MAX_ANALYSIS_BONUS < self.min_score
+
+    def recheck_titles(self, artist):
+        """Sets accepted before a title rule existed are judged again by it."""
+        for item in list(self.items.values()):
+            if (item.get("artistId") == artist["id"] and item.get("status") == "accepted"
+                    and item.get("durationSec") and self._ruled_out(*self._metadata(item, artist)[2:])):
+                self.evaluate(item, artist)
+                self.log(f"    {item['status']:9} {item['id']}  {item.get('title', '')[:70]} (title rule)")
 
     def evaluate(self, item, artist):
         """Set status, reasons and quality on an item that is after the start date."""
@@ -284,9 +352,16 @@ class Scanner:
                                f"{self.min_sec // 60} min)"]
             return item
 
-        own = self._own(artist, item)
-        trusted = not own and matching.is_trusted_uploader(item.get("uploader", ""), self.trusted)
-        signals = quality.metadata_signals(item, trusted, own, matching.title_signals(item.get("title", "")))
+        own, trusted, signals, content = self._metadata(item, artist)
+        if self._ruled_out(signals, content):
+            # The title alone rules it out (a talk, a clip, another DJ's mix),
+            # whatever the sound: no need to download and measure it.
+            score = quality.score(signals)
+            item["quality"] = {"score": score, "label": quality.label_for(score), "signals": signals,
+                               "analysis": None, "verified": False, "analysisError": None}
+            item["status"] = "rejected"
+            item["reasons"] = [s["text"] for s in content[:3]]
+            return item
 
         analysis, analysis_error = None, None
         if self.settings.get("audioAnalysis", True):
@@ -332,6 +407,9 @@ class Scanner:
         if item["id"] in self.seen:
             return None
         if not (matching.names_artist(item.get("title", ""), self._aliases(artist)) or self._own(artist, item)):
+            return None
+        if not self.passes_filters(artist, item):
+            self._remember(item, artist, "filtered")
             return None
 
         # Cheap decisions on search-result data, before any extra requests.
@@ -470,6 +548,38 @@ class Scanner:
             self.log(f"  start moved forward to {iso(since)}: {dropped} sets are now before it")
         return False
 
+    def apply_filters(self, artist):
+        """Bring stored results in line with the artist's title filters.
+
+        Sets the filters now rule out are dropped, and uploads they skipped
+        before but let through now are looked at again. Returns True when
+        there are such uploads, so the searches reach back far enough to find
+        them.
+        """
+        aid = artist["id"]
+        must, exclude = self._filters(artist)
+        signature = json.dumps([sorted(must), sorted(exclude)], ensure_ascii=False)
+        previous = self.filter_state.get(aid)
+        self.filter_state[aid] = signature
+        if previous == signature:
+            return False
+        # Uploads the old filters skipped that the new ones let through: look again.
+        reopened = 0
+        for key, entry in list(self.seen.items()):
+            if (entry.get("artistId") == aid and entry.get("reason") == "filtered"
+                    and self.passes_filters(artist, entry)):
+                del self.seen[key]
+                reopened += 1
+        dropped = 0
+        for item_id, item in list(self.items.items()):
+            if item.get("artistId") == aid and not self.passes_filters(artist, item):
+                self._remember(item, artist, "filtered")
+                del self.items[item_id]
+                dropped += 1
+        if dropped or reopened:
+            self.log(f"  title filters changed: {dropped} sets dropped, {reopened} skipped uploads looked at again")
+        return reopened > 0
+
     def forget_removed_artists(self, known_ids):
         """Results of artists no longer in the config are dropped; re-adding one starts fresh."""
         for item_id, item in list(self.items.items()):
@@ -482,6 +592,9 @@ class Scanner:
         for aid in list(self.since_state):
             if aid not in known_ids:
                 del self.since_state[aid]
+        for aid in list(self.filter_state):
+            if aid not in known_ids:
+                del self.filter_state[aid]
         self.deep_pending &= set(known_ids)
 
     def run(self):
@@ -489,15 +602,18 @@ class Scanner:
         self.forget_removed_artists(known_ids)
         for artist in self.config["artists"]:
             since = parse_time(artist["trackingSince"])
+            moved = self.apply_start(artist, since)
+            refiltered = self.apply_filters(artist)
             # Also deep when the last scan ran out of time before it was done.
-            deep = self.apply_start(artist, since) or artist["id"] in self.deep_pending
+            deep = moved or refiltered or artist["id"] in self.deep_pending
             fresh = [f"{pf} {kind} {value}" for pf, kind, value in job_specs(artist)
                      if job_key(artist, pf, kind, value) not in self.baselined]
             self.log(f"{artist['name']}: tracking since {iso(since)}{' (searching further back)' if deep else ''}"
                      f"{' (first look, taken as baseline: ' + '; '.join(fresh) + ')' if fresh else ''}")
             batch, found_by, answered = {}, {}, []
-            for platform, label, key, job in self._jobs(artist, self.deep_limit if deep else self.limit):
-                entry = {"artistId": artist["id"], "platform": platform, "label": label, "at": iso(self.now)}
+            for platform, label, key, url, job in self._jobs(artist, self.deep_limit if deep else self.limit):
+                entry = {"artistId": artist["id"], "platform": platform, "label": label, "url": url,
+                         "at": iso(self.now)}
                 try:
                     found = job()
                     entry.update(ok=True, found=len(found))
@@ -523,6 +639,7 @@ class Scanner:
                 if stored:
                     handled.add(stored["id"])
             self.recheck_pending(artist, since, handled)
+            self.recheck_titles(artist)
             self.dedupe(artist, handled)
             self.baselined.update(answered)
             waiting = self.deferred.get(artist["id"], 0)
@@ -534,6 +651,7 @@ class Scanner:
         self.prune()
         self.state["baselined"] = sorted(self.baselined)
         self.state["since"] = self.since_state
+        self.state["filters"] = self.filter_state
         self.state["deepPending"] = sorted(self.deep_pending)
         return self.output()
 
@@ -562,6 +680,8 @@ class Scanner:
             },
             # Uploads found but not judged yet, because the scan ran out of time.
             "backlog": self.deferred.get(a["id"], 0),
+            "mustMention": self._filters(a)[0],
+            "exclude": self._filters(a)[1],
         } for a in self.config["artists"]]
         items = []
         for it in self.items.values():
@@ -708,6 +828,10 @@ def artist_problems(artist, seen_ids=()):
             raise ValueError
     except Exception:
         problems.append(f"{who}: startdatoen er ikke en gyldig dato")
+    for key, what in (("mustMention", "“Skal også nævne”"), ("exclude", "“Udelad titler med”"), ("searchNames", "stavemåderne")):
+        value = artist.get(key)
+        if value is not None and not (isinstance(value, list) and all(isinstance(w, str) for w in value)):
+            problems.append(f"{who}: {what} skal være en liste af ord")
     sources_ = artist.get("sources")
     if not isinstance(sources_, dict):
         problems.append(f"{who}: mangler 'sources'")

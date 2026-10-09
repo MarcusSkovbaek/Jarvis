@@ -90,6 +90,51 @@ def title_signals(title):
     return signals
 
 
+_FEATURE = re.compile(r"(?<![^\W_])(?:feat|ft|featuring)(?![^\W_])\.?")
+_MIXWORD = re.compile(r"(?<![^\W_])(?:mix|mixes|mixtape|megamix|mixed|playlist|compilation)(?![^\W_])")
+_LISTSEP = re.compile(r"\s(?:x|&|\+|/|vs\.?)\s|,")
+
+
+def featured_only(title, aliases):
+    """True when a title names the artist only after "feat." in a mix or a list.
+
+    "3 HOUR MIX feat JOHN SUMMIT x SUB FOCUS x CHRIS LAKE ..." is another DJ's
+    mix with their tracks in it. "John Summit feat. Hayla live" names the artist
+    first, and "Defected Croatia feat. John Summit" lists one act at an event:
+    both are left alone.
+    """
+    text = fold(title)
+    m = _FEATURE.search(text)
+    if not m:
+        return False
+    before, after = text[:m.start()], text[m.end():]
+    if names_artist(before, aliases) or not names_artist(after, aliases):
+        return False
+    return bool(_MIXWORD.search(before)) or len(_LISTSEP.findall(after)) >= 2
+
+
+def credit_signals(title, aliases):
+    """Score adjustments that depend on how the title credits this artist."""
+    if featured_only(title, aliases):
+        return [{"code": "featured", "impact": -45,
+                 "text": "Titlen nævner kun kunstneren efter “feat.” – et mix af en anden DJ"}]
+    return []
+
+
+def _plain(text):
+    # "and" is left out, so "drum and bass" is "drum & bass" is "Drum&Bass".
+    return " ".join(w for w in words(text) if w != "and")
+
+
+def mentions(text, phrase):
+    """The words of `phrase` appear together in `text`; case, accents and punctuation ignored.
+
+    "drum and bass" matches "Drum&Bass"; "1991" does not match "19912".
+    """
+    wanted = _plain(phrase)
+    return bool(wanted) and f" {wanted} " in f" {_plain(text)} "
+
+
 def is_trusted_uploader(uploader, trusted):
     """True when the uploader is one of the configured labels, radios or venues."""
     name = " ".join(words(uploader))

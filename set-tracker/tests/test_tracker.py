@@ -194,6 +194,28 @@ class Matching(unittest.TestCase):
                                                 {"title": "¥ØU$UK€ ¥UK1MAT$U | Boiler Room: Osaka", "durationSec": 3735},
                                                 self.aliases))
 
+    def test_artist_named_only_after_feat_in_a_mix(self):
+        summit = ["JOHN SUMMIT", "John Summit"]
+        mix = ("Tech House & Drum & Bass Mix | FULL CIRCLE - 3 HOUR MIX feat JOHN SUMMIT x SUB FOCUS x "
+               "CHRIS LAKE x MAU P x CULTURE SHOCK x DIMENSION")
+        self.assertTrue(matching.featured_only(mix, summit))
+        self.assertTrue(matching.featured_only(mix, ["Sub Focus"]))
+        self.assertTrue(matching.featured_only("Best of 2026 mix ft. John Summit", summit))
+        for title in ["John Summit feat. Hayla - Live at Coachella 2026",          # the artist comes first
+                      "Defected Croatia 2026 feat. John Summit (Full Set)",       # one act at an event
+                      "Boiler Room x Defected ft. John Summit & Hayla",
+                      "Armin van Buuren F2F John Summit @ A State of Trance 2026"]:
+            self.assertFalse(matching.featured_only(title, summit), title)
+        self.assertEqual([s["code"] for s in matching.credit_signals(mix, summit)], ["featured"])
+
+    def test_mentions_whole_words_only(self):
+        self.assertTrue(matching.mentions("Tech House & Drum&Bass Mix", "drum and bass"))
+        self.assertTrue(matching.mentions("WORSHIP (Sub Focus, Dimension) live", "sub focus"))
+        self.assertTrue(matching.mentions("DJ Remmy | Praise & Worship TikTok Live", "Praise"))
+        self.assertFalse(matching.mentions("Praiseworthy closing set", "praise"))
+        self.assertFalse(matching.mentions("Live 19912", "1991"))
+        self.assertFalse(matching.mentions("anything", "and"))
+
     def test_stylised_name_tokens_collapse(self):
         self.assertEqual(matching.title_tokens("¥ØU$UK€ ¥UK1MAT$U | Boiler Room: Tokyo", self.aliases),
                          {"boiler", "room", "tokyo"})
@@ -917,6 +939,103 @@ class Pipeline(unittest.TestCase):
         _, out = scan(FakeFetcher())
         self.assertEqual(out["artists"][0]["profiles"], {"soundcloud": ["yousukeyukimatsu"], "youtube": []})
         self.assertEqual(out["problems"], [])
+
+    def test_every_search_links_to_its_page(self):
+        _, out = scan(FakeFetcher())
+        urls = {h["label"]: h["url"] for h in out["health"]}
+        self.assertEqual(urls["YouTube-søgning “Yousuke Yukimatsu”"],
+                         "https://www.youtube.com/results?search_query=Yousuke+Yukimatsu&sp=CAI%253D")
+        self.assertEqual(urls["SoundCloud-søgning “yukimatsu”"], "https://soundcloud.com/search/sounds?q=yukimatsu")
+        self.assertEqual(urls["SoundCloud-profil yousukeyukimatsu"], "https://soundcloud.com/yousukeyukimatsu/tracks")
+        self.assertEqual(pipeline.job_url("soundcloud", "search", "¥ØU$UK€ ¥UK1MAT$U"),
+                         "https://soundcloud.com/search/sounds?q=%C2%A5%C3%98U%24UK%E2%82%AC%20%C2%A5UK1MAT%24U")
+        self.assertEqual(pipeline.job_url("youtube", "channel", "https://www.youtube.com/@boilerroom"),
+                         "https://www.youtube.com/@boilerroom/videos")
+        self.assertEqual(pipeline.job_url("youtube", "channel", "@lotradio"), "https://www.youtube.com/@lotradio/videos")
+        self.assertEqual(pipeline.job_url("youtube", "channel", "UCGBpxWJr9FNOcFYA5GkKrMg"),
+                         "https://www.youtube.com/channel/UCGBpxWJr9FNOcFYA5GkKrMg/videos")
+        self.assertEqual(pipeline.job_url("soundcloud", "user", "https://soundcloud.com/djx/"), "https://soundcloud.com/djx/tracks")
+
+    def _worship(self, **kw):
+        return dict({"id": "worship", "name": "WORSHIP", "displayName": "WORSHIP", "trackingSince": SINCE,
+                     "searchNames": ["WORSHIP"], "aliases": [], "sources": {"youtube": {}, "soundcloud": {}}}, **kw)
+
+    def test_title_filters_for_a_name_that_is_also_a_word(self):
+        church = yt("c", "Live Prayer & Worship | UPPERROOM Prayer Room", 120, uploader="UPPERROOM")
+        mix = sc("m", "WORSHIP 2026 MIX | CLASSICS & NEW - VOLUME 02", 114, uploader="jkdthedj")
+        real = yt("r", "WORSHIP (Sub Focus, Dimension, Culture Shock & 1991) live @ Let It Roll", 90)
+        boiler = yt("b", "WORSHIP | Boiler Room London", 75, uploader="Boiler Room")
+        f = FakeFetcher(yt_results=[church, real, boiler], sc_results=[mix])
+        artist = self._worship(mustMention=["Sub Focus", "Dimension", "drum and bass"], exclude=["prayer", "church"])
+        cfg = self._cfg(artist)
+        s, out = scan(f, state={"baselined": keys(cfg)}, config=cfg)
+        self.assertEqual(sorted(by_id(out)), ["yt:b", "yt:r"])     # Boiler Room counts without the words
+        self.assertEqual(s.seen["yt:c"]["reason"], "filtered")
+        self.assertEqual(s.seen["sc:m"]["reason"], "filtered")
+        self.assertNotIn(("analyze", "yt:c"), f.calls)               # skipped before any work
+        self.assertEqual(out["artists"][0]["mustMention"], ["Sub Focus", "Dimension", "drum and bass"])
+        self.assertEqual(out["artists"][0]["exclude"], ["prayer", "church"])
+
+    def test_adding_filters_drops_sets_already_shown_and_changing_them_looks_again(self):
+        church = sc("c", "Worship and Prayer 3 October 2026", 82, uploader="Let There Be Light")
+        mix = sc("m", "WORSHIP 2026 MIX | CLASSICS & NEW - VOLUME 02", 114, uploader="jkdthedj")
+        cfg = self._cfg(self._worship())
+        s, out = scan(FakeFetcher(sc_results=[church, mix]), state={"baselined": keys(cfg)}, config=cfg)
+        self.assertEqual(sorted(by_id(out)), ["sc:c", "sc:m"])       # what WORSHIP found before filters
+        # Filters are added in the app: both go, without another search.
+        strict = self._cfg(self._worship(mustMention=["drum and bass"], exclude=["prayer"]))
+        f2 = FakeFetcher(sc_results=[])
+        s2, out2 = scan(f2, state=s.state, data=out, now=NOW + timedelta(hours=2), config=strict)
+        self.assertEqual(out2["items"], [])
+        self.assertEqual({s2.seen["sc:c"]["reason"], s2.seen["sc:m"]["reason"]}, {"filtered"})
+        self.assertEqual(set(f2.limits), {40})
+        # Loosened again: what was skipped is looked at again, further back.
+        loose = self._cfg(self._worship(exclude=["prayer"]))
+        f3 = FakeFetcher(sc_results=[church, mix])
+        s3, out3 = scan(f3, state=s2.state, data=out2, now=NOW + timedelta(hours=4), config=loose)
+        self.assertEqual(sorted(by_id(out3)), ["sc:m"])
+        self.assertEqual(s3.seen["sc:c"]["reason"], "filtered")
+        self.assertEqual(set(f3.limits), {150})
+        # Unchanged after that: an ordinary scan.
+        f4 = FakeFetcher(sc_results=[church, mix])
+        scan(f4, state=s3.state, data=out3, now=NOW + timedelta(hours=6), config=loose)
+        self.assertEqual(set(f4.limits), {40})
+
+    def test_another_djs_mix_is_ruled_out_by_its_title_without_measuring(self):
+        mix = sc("m", "Tech House & DnB Mix | 3 HOUR MIX feat Yousuke Yukimatsu x Sub Focus x Chris Lake", 180,
+                 uploader="DUBAYCE")
+        f = FakeFetcher(sc_results=[mix])
+        _, out = scan(f)
+        item = by_id(out)["sc:m"]
+        self.assertEqual(item["status"], "rejected")
+        self.assertIn("feat.", item["reasons"][0])
+        self.assertNotIn(("analyze", "sc:m"), f.calls)
+        self.assertFalse(item["quality"]["verified"])
+
+    def test_a_set_accepted_before_a_title_rule_is_judged_again(self):
+        mix = sc("m", "3 HOUR MIX feat Yousuke Yukimatsu x Sub Focus x Chris Lake", 180, uploader="DUBAYCE")
+        accepted = dict(mix, artistId="yy", status="accepted", firstSeenAt=pipeline.iso(NOW),
+                        quality={"score": 83, "signals": []})
+        f = FakeFetcher()
+        _, out = scan(f, data={"items": [accepted]})
+        item = by_id(out)["sc:m"]
+        self.assertEqual(item["status"], "rejected")
+        self.assertIn("feat.", item["reasons"][0])
+        self.assertNotIn(("analyze", "sc:m"), f.calls)
+        # A good set is left as it was, without being measured again.
+        good = dict(sc("g", "Yousuke Yukimatsu @ Lot Radio", 120, uploader="The Lot Radio"),
+                    artistId="yy", status="accepted", quality={"score": 80, "signals": []})
+        f2 = FakeFetcher()
+        _, out2 = scan(f2, data={"items": [good]})
+        self.assertEqual(by_id(out2)["sc:g"]["status"], "accepted")
+        self.assertEqual(by_id(out2)["sc:g"]["quality"]["score"], 80)
+        self.assertFalse([c for c in f2.calls if c[0] == "analyze"])
+
+    def test_filters_must_be_lists_of_words(self):
+        bad = self._worship(mustMention="Sub Focus")
+        ready, problems = pipeline.prepare_config(self._cfg(copy.deepcopy(ARTIST), bad))
+        self.assertEqual([a["id"] for a in ready["artists"]], ["yy"])
+        self.assertIn("Skal også nævne", problems[0])
 
     def test_second_artist_is_independent(self):
         other = copy.deepcopy(ARTIST)

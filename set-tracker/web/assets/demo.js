@@ -6,6 +6,8 @@ window.SET_TRACKER_DEMO_DATA = function (now) {
   var H = 3600 * 1000;
   function ago(hours) { return new Date(now.getTime() - hours * H).toISOString().replace(/\.\d+Z$/, "Z"); }
   var yt = "https://www.youtube.com/results?search_query=Yousuke+Yukimatsu&sp=CAI%253D";
+  function ys(q) { return "https://www.youtube.com/results?search_query=" + encodeURIComponent(q).replace(/%20/g, "+") + "&sp=CAI%253D"; }
+  function ss(q) { return "https://soundcloud.com/search/sounds?q=" + encodeURIComponent(q); }
   var sc = "https://soundcloud.com/yousukeyukimatsu";
   var good = { rmsDb: -13.8, sideDb: -11.2, clipFraction: 0.00002, silenceFraction: 0, cutoffHz: 19750, bassDb: 9.4 };
   function sig(list) { return list.map(function (s) { return { code: s[0], impact: s[1], text: s[2] }; }); }
@@ -26,13 +28,13 @@ window.SET_TRACKER_DEMO_DATA = function (now) {
       links: { soundcloud: sc, youtube: yt, residentAdvisor: "https://ra.co/dj/yosukeyukimatsu-jp" }
     }],
     health: [
-      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “Yousuke Yukimatsu”", ok: true, found: 40 },
-      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “¥ØU$UK€ ¥UK1MAT$U”", ok: true, found: 40 },
-      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “YØU$UK€ YUK1MAT$U”", ok: true, found: 26 },
-      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “行松陽介”", ok: true, found: 40 },
-      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “Yousuke Yukimatsu”", ok: true, found: 41 },
-      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “¥ØU$UK€ ¥UK1MAT$U”", ok: true, found: 40 },
-      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “行松陽介”", ok: true, found: 27 }
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “Yousuke Yukimatsu”", url: ys("Yousuke Yukimatsu"), ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “¥ØU$UK€ ¥UK1MAT$U”", url: ys("¥ØU$UK€ ¥UK1MAT$U"), ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “YØU$UK€ YUK1MAT$U”", url: ys("YØU$UK€ YUK1MAT$U"), ok: true, found: 26 },
+      { artistId: "yousuke-yukimatsu", platform: "youtube", label: "YouTube-søgning “行松陽介”", url: ys("行松陽介"), ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “Yousuke Yukimatsu”", url: ss("Yousuke Yukimatsu"), ok: true, found: 41 },
+      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “¥ØU$UK€ ¥UK1MAT$U”", url: ss("¥ØU$UK€ ¥UK1MAT$U"), ok: true, found: 40 },
+      { artistId: "yousuke-yukimatsu", platform: "soundcloud", label: "SoundCloud-søgning “行松陽介”", url: ss("行松陽介"), ok: true, found: 27 }
     ],
     items: [
       {

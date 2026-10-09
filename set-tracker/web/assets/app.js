@@ -62,6 +62,7 @@
     error: null,
     loadedAt: 0,
     activity: null,      // set by admin.js while it follows a scan on GitHub
+    spell: null,         // the spelling whose search links are showing
     keep: new Set(),     // toggled while looking at a filter: stay put until the filter changes
     open: new Set(),     // expanded quality panels
     undo: null,
@@ -106,7 +107,8 @@
     plus: ["M12 5v14", "M5 12h14"],
     close: ["M6 6l12 12", "M18 6L6 18"],
     back: ["M15 18l-6-6 6-6"],
-    sliders: ["M4 7h10", "M18 7h2", "M4 17h4", "M12 17h8", "M16 5v4", "M10 15v4"]
+    sliders: ["M4 7h10", "M18 7h2", "M4 17h4", "M12 17h8", "M16 5v4", "M10 15v4"],
+    search: ["M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Z", "M20 20l-4.8-4.8"]
   };
   var FILLED = { youtube: true, soundcloud: true };
 
@@ -360,7 +362,19 @@
     return ["ok", "Tjekket " + compactWhen(at) + suffix, compactWhen(at)];
   }
 
+  // Connected to GitHub (admin.js): the refresh button starts a real scan.
+  function connected() { return !!(window.SetTracker && window.SetTracker.admin && window.SetTracker.admin.connected()); }
+
+  function searchUrl(platform, q) {
+    return platform === "youtube"
+      ? "https://www.youtube.com/results?search_query=" + encodeURIComponent(q).replace(/%20/g, "+") + "&sp=CAI%253D"
+      : "https://soundcloud.com/search/sounds?q=" + encodeURIComponent(q);
+  }
+
   function renderStatus() {
+    var refresh = $("#refresh"), label = connected() ? "Scan nu" : "Hent nyeste data";
+    refresh.setAttribute("aria-label", label);
+    refresh.title = label;
     var info = statusInfo();
     $("#scan-led").dataset.state = info[0];
     $("#scan-text").textContent = info[1];
@@ -456,11 +470,34 @@
     }
 
     if (!many && shown[0] && (shown[0].searchNames || []).length) {
+      var who = shown[0];
+      // Each spelling opens its own search, on the platform of your choice.
       var spellList = el("ul", { class: "spellings__list" });
-      shown[0].searchNames.forEach(function (n) {
-        append(spellList, el("li", { lang: hasCJK(n) ? "ja" : null, text: n }));
+      who.searchNames.forEach(function (n) {
+        var isOpen = S.spell === n;
+        append(spellList, el("li", null, el("button", {
+          class: "spell", type: "button", "data-spell": n, "aria-expanded": isOpen ? "true" : "false",
+          "aria-controls": isOpen ? "spell-open" : null, lang: hasCJK(n) ? "ja" : null,
+          "aria-label": "Åbn søgningen efter " + n
+        }, el("span", { text: n }), icon("search", "icon--s"))));
       });
       append(plate, el("div", { class: "spellings" }, el("span", { class: "label", text: "Søger efter" }), spellList));
+      if (S.spell && who.searchNames.indexOf(S.spell) !== -1) {
+        append(plate, el("div", { class: "spell-open", id: "spell-open" },
+          el("span", { class: "spell-open__text" }, "Åbn søgningen efter ",
+            el("b", { lang: hasCJK(S.spell) ? "ja" : null, text: "“" + S.spell + "”" }), " på"),
+          el("span", { class: "spell-open__links" },
+            el("a", { class: "chip-link", href: searchUrl("youtube", S.spell), target: "_blank", rel: "noopener noreferrer" },
+              icon("youtube", "icon--s"), "YouTube", icon("open", "icon--s")),
+            el("a", { class: "chip-link", href: searchUrl("soundcloud", S.spell), target: "_blank", rel: "noopener noreferrer" },
+              icon("soundcloud", "icon--s"), "SoundCloud", icon("open", "icon--s")))));
+      }
+      var must = who.mustMention || [], skip = who.exclude || [];
+      if (must.length || skip.length) {
+        append(plate, el("p", { class: "plate__rules" },
+          must.length ? el("span", null, el("b", { text: "Skal også nævne " }), must.join(" · ")) : null,
+          skip.length ? el("span", null, el("b", { text: "Udelader titler med " }), skip.join(" · ")) : null));
+      }
     }
 
     var s = S.data.settings || {};
@@ -801,9 +838,13 @@
       append(ul, el("li", null, el("span", { class: "led" }), el("span", { class: "src__label", text: "Første tjek er ikke kørt endnu" })));
     }
     health.forEach(function (h) {
+      // Each search links to the same search on the platform's own site.
+      var href = safeUrl(h.url);
       append(ul, el("li", null,
         el("span", { class: "led", "data-state": h.ok ? "ok" : "bad" }),
-        el("span", { class: "src__label", title: h.label, text: h.label }),
+        href ? el("a", { class: "src__label", href: href, target: "_blank", rel: "noopener noreferrer", title: "Åbn: " + h.label },
+          el("span", { class: "src__text", text: h.label }), icon("open", "icon--s"))
+          : el("span", { class: "src__label", title: h.label }, el("span", { class: "src__text", text: h.label })),
         el("span", { class: "src__result", text: h.ok ? (h.found === 1 ? "1 resultat" : (h.found || 0) + " resultater") : "fejl" }),
         h.ok ? null : el("span", { class: "src__error", text: h.error || "Ukendt fejl" })));
     });
@@ -820,6 +861,12 @@
     var source = { remote: "data hentet direkte fra GitHub", file: "data fra lokal fil", cache: "gemt kopi uden forbindelse" }[S.from];
     if (source) parts.push(source);
     times.textContent = parts.length ? cap(parts.join(" · ")) + "." : "";
+
+    var scanRow = $("#scan-row");
+    scanRow.hidden = DEMO || !window.SetTracker.admin;
+    $("#scan-hint").textContent = connected()
+      ? "Starter en scanning på GitHub med det samme, også hvis en anden kører."
+      : "Kræver, at appen er forbundet til GitHub (under Overvågninger).";
 
     var s = d.settings || {};
     var how = $("#howto");
@@ -882,7 +929,7 @@
   // Focus survives a re-render: find the control that had it by its data attributes.
   function focusKey(node) {
     if (!node || !node.getAttribute) return null;
-    var keys = ["data-toggle-heard", "data-meter", "data-filter", "data-action"];
+    var keys = ["data-toggle-heard", "data-meter", "data-filter", "data-action", "data-spell"];
     for (var i = 0; i < keys.length; i++) {
       if (node.hasAttribute(keys[i])) {
         var sel = "[" + keys[i] + '="' + CSS.escape(node.getAttribute(keys[i])) + '"]';
@@ -905,7 +952,11 @@
     if (opener) { markOpened(opener.getAttribute("data-open")); return; }
     var btn = t.closest("button, [data-filter]");
     if (!btn) return;
-    if (btn.id === "refresh") { load(true); return; }
+    if (btn.id === "refresh") {
+      if (connected()) window.SetTracker.admin.scanNow(); else load(true);
+      return;
+    }
+    if (btn.getAttribute("data-action") === "scan-now") { window.SetTracker.admin.scanNow(); return; }
     if (btn.id === "toast-undo") {
       var undo = S.undo;
       $("#toast").hidden = true;
@@ -923,6 +974,11 @@
       else if (btn.getAttribute("data-action") === "clear-filters") {
         prefs.filter.platform = "all"; prefs.filter.artist = "all"; S.keep.clear(); persist(); render();
       } else if (btn.getAttribute("data-action") === "reload") load(true);
+      else if (btn.hasAttribute("data-spell")) {
+        var spell = btn.getAttribute("data-spell");
+        S.spell = S.spell === spell ? null : spell;
+        render();
+      }
     });
   });
 

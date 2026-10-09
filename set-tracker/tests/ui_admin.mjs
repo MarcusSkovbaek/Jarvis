@@ -157,7 +157,11 @@ function siteData() {
       trackingSince: new Date(a.trackingSince).toISOString().replace(/\.\d+Z$/, "Z"), links: a.links,
       profiles: { soundcloud: a.sources.soundcloud.users || [], youtube: a.sources.youtube.channels || [] },
     })),
-    problems: [], health: [{ artistId: REAL_CONFIG.artists[0].id, platform: "youtube", label: "YouTube-søgning “x”", ok: true, found: 40 }],
+    problems: [], health: [
+      { artistId: REAL_CONFIG.artists[0].id, platform: "youtube", label: "YouTube-søgning “x”", ok: true, found: 40,
+        url: "https://www.youtube.com/results?search_query=x&sp=CAI%253D" },
+      { artistId: REAL_CONFIG.artists[0].id, platform: "soundcloud", label: "SoundCloud-profil yousukeyukimatsu", ok: true, found: 0,
+        url: "https://soundcloud.com/yousukeyukimatsu/tracks" }],
     items: [],
   };
   return d;
@@ -556,7 +560,10 @@ console.log("\nkeyboard focus and typing");
   check("after saving, focus is on the sheet's title", (await active()) === "manage-title", await active());
   check("the title shows no focus ring", await page.$eval("#manage-title", (el) => getComputedStyle(el).outlineStyle) === "none");
   // Disabled buttons look disabled.
-  check("a disabled button looks disabled", await page.$eval("[data-act=scan-now]", (el) => el.disabled && getComputedStyle(el).opacity === "0.5"));
+  check("Scan nu stays available while a scan runs", await page.$eval("[data-act=scan-now]", (el) => !el.disabled));
+  check("a disabled button looks disabled", await page.$eval("[data-act=add]", (el) => {
+    el.disabled = true; const o = getComputedStyle(el).opacity; el.disabled = false; return o === "0.5";
+  }));
   await page.waitForFunction(() => /Opdateret/.test(document.querySelector(".sheet__follow")?.textContent || ""), null, { timeout: 15000 });
   check("the result says how many sets are new", /Opdateret \d{2}\.\d{2}: ingen nye sæt\./.test(await page.locator(".sheet__follow").innerText()),
     await page.locator(".sheet__follow").innerText());
@@ -650,7 +657,116 @@ console.log("\nthe dimmed backdrop");
   await context.close();
 }
 
-console.log("\npressing Tjek nu twice");
+console.log("\nscanning from the page");
+{
+  const data = { current: siteData() };
+  const gh = fakeGitHub({ onRunDone: () => { data.current = siteData(); data.current.generatedAt = new Date().toISOString(); } });
+  const { page, context, errors } = await open(IPHONE, { gh, data, token: GOOD });
+  check("connected, the refresh button scans", (await page.getAttribute("#refresh", "aria-label")) === "Scan nu");
+  check("the bottom of the page offers Scan nu", await page.locator("#scan-row").isVisible()
+    && /også hvis en anden kører/.test(await page.locator("#scan-hint").innerText()));
+  await page.click("#refresh");
+  await page.waitForFunction(() => /Scanner/.test(document.querySelector("#scan-text").textContent));
+  check("the top bar starts a scan on GitHub", gh.st.calls.filter((c) => c.startsWith("POST " + DISPATCH)).length === 1);
+  check("without opening the sheet", !(await sheetOpen(page)));
+  check("a message says it started", /Scanning startet/.test(await page.locator("#toast-text").innerText()));
+  await page.waitForFunction(() => /Opdateret \d{2}\.\d{2}: ingen nye sæt/.test(document.querySelector("#toast-text").textContent), null, { timeout: 15000 });
+  check("the result is told when it is done", true);
+  check("the top bar is back to normal", !/Scanner/.test(await page.locator("#scan-text").innerText()));
+  // A second scan while one runs is queued, not refused.
+  await page.click("[data-action=scan-now]");
+  await page.waitForFunction(() => /Scanner/.test(document.querySelector("#scan-text").textContent));
+  await page.click("[data-action=scan-now]");
+  await page.waitForFunction(() => /i kø/.test(document.querySelector("#toast-text").textContent));
+  check("Scan nu during a scan queues another", gh.st.calls.filter((c) => c.startsWith("POST " + DISPATCH)).length === 3);
+  await page.waitForFunction(() => /Opdateret/.test(document.querySelector("#toast-text").textContent), null, { timeout: 20000 });
+  check("no script errors (scan from the page)", errors.length === 0, errors.join(" | "));
+  await context.close();
+
+  // Not connected: refresh only reloads; Scan nu asks to connect, then scans.
+  const gh2 = fakeGitHub();
+  const r2 = await open(IPHONE, { gh: gh2, data: { current: siteData() } });
+  check("not connected, the refresh button reloads", (await r2.page.getAttribute("#refresh", "aria-label")) === "Hent nyeste data");
+  await r2.page.click("#refresh");
+  await settle(r2.page, 400);
+  check("and starts nothing on GitHub", gh2.st.calls.length === 0 && !(await sheetOpen(r2.page)));
+  await r2.page.click("[data-action=scan-now]");
+  await r2.page.waitForSelector("#f-token");
+  check("Scan nu explains that GitHub is needed", /Scanningerne kører på GitHub/.test(await r2.page.locator(".sheet__lead").innerText()));
+  await r2.page.fill("#f-token", GOOD);
+  await r2.page.click("#f-connect");
+  await r2.page.waitForFunction(() => /Venter på GitHub|I kø|Scanner|Opdateret/.test(document.querySelector(".sheet__follow")?.textContent || ""), null, { timeout: 15000 });
+  check("after connecting, the scan starts by itself", gh2.st.calls.filter((c) => c.startsWith("POST " + DISPATCH)).length === 1);
+  check("the refresh button now scans", (await r2.page.getAttribute("#refresh", "aria-label")) === "Scan nu");
+  check("no script errors (connect to scan)", r2.errors.length === 0, r2.errors.join(" | "));
+  await r2.context.close();
+}
+
+console.log("\nfilters for names that are also words");
+{
+  const gh = fakeGitHub();
+  const { page, context, errors } = await open(IPHONE, { gh, data: { current: siteData() }, token: GOOD });
+  await page.click("#manage-open");
+  await page.waitForSelector("[data-act=edit]");
+  await page.click("[data-act=edit]");
+  await page.waitForSelector("#f-more");
+  check("the filters are folded away when not in use", !(await page.$eval("#f-more", (d) => d.open)));
+  await page.click("#f-more summary");
+  await page.fill("#f-must", Array.from({ length: 26 }, (_, i) => "ord" + i).join(", "));
+  await page.click("#f-save");
+  await settle(page);
+  check("too many words are refused at the field", /Højst 25/.test(await page.locator("[data-field=must] .field__error").innerText())
+    && gh.st.commits.length === 0);
+  await page.fill("#f-must", " Sub Focus ,drum and bass;  dnb , sub focus ");
+  check("correcting the field clears its error", await page.$eval("[data-field=must] .field__error", (e) => e.hidden)
+    && !(await page.$eval("#f-must", (e) => e.hasAttribute("aria-invalid"))));
+  await page.fill("#f-exclude", "praise; church");
+  await page.screenshot({ path: path.join(SHOTS, "admin-filters-iphone.png") });
+  await page.click("#f-save");
+  await page.waitForFunction(() => document.querySelector("#manage-title").textContent === "Overvågninger");
+  let saved = gh.config().artists[0];
+  check("filters are saved as lists of words", JSON.stringify(saved.mustMention) === JSON.stringify(["Sub Focus", "drum and bass", "dnb"])
+    && JSON.stringify(saved.exclude) === JSON.stringify(["praise", "church"]), JSON.stringify([saved.mustMention, saved.exclude]));
+  await page.click("[data-act=edit]");
+  await page.waitForSelector("#f-more");
+  check("in use, they are shown unfolded", await page.$eval("#f-more", (d) => d.open) && (await page.inputValue("#f-must")) === "Sub Focus, drum and bass, dnb");
+  check("the form fits a phone with them open", (await sheetLayout(page)).length === 0, (await sheetLayout(page)).join(" | "));
+  await page.fill("#f-must", "");
+  await page.fill("#f-exclude", "");
+  await page.click("#f-save");
+  await page.waitForFunction(() => document.querySelector("#manage-title").textContent === "Overvågninger");
+  saved = gh.config().artists[0];
+  check("emptied filters leave the file", !("mustMention" in saved) && !("exclude" in saved));
+  check("no script errors (filters)", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nopening the other searches");
+{
+  const { page, context, errors } = await open(IPHONE, { data: { current: siteData() } });
+  const chips = page.locator(".spell");
+  check("each spelling is a button", (await chips.count()) === REAL_CONFIG.artists[0].searchNames.length);
+  await chips.nth(1).click();
+  await page.waitForSelector("#spell-open");
+  const links = await page.$$eval("#spell-open a", (as) => as.map((a) => [a.textContent.trim(), a.href, a.target]));
+  check("a spelling opens its search on YouTube or SoundCloud", links.length === 2
+    && links[0][1] === "https://www.youtube.com/results?search_query=%C2%A5%C3%98U%24UK%E2%82%AC+%C2%A5UK1MAT%24U&sp=CAI%253D"
+    && links[1][1] === "https://soundcloud.com/search/sounds?q=%C2%A5%C3%98U%24UK%E2%82%AC%20%C2%A5UK1MAT%24U"
+    && links.every((l) => l[2] === "_blank"), JSON.stringify(links));
+  check("the chip says it is open", (await chips.nth(1).getAttribute("aria-expanded")) === "true");
+  check("focus stays on the chip", await page.evaluate(() => document.activeElement.classList.contains("spell")));
+  check("the page fits with it open", (await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)));
+  await page.screenshot({ path: path.join(SHOTS, "page-spelling-open-iphone.png") });
+  await chips.nth(1).click();
+  check("tapping again closes it", (await page.locator("#spell-open").count()) === 0);
+  const src = await page.$$eval("#sources a", (as) => as.map((a) => [a.href, a.target]));
+  check("the sources at the bottom link to their searches", src.length === 2
+    && src[0][0] === "https://www.youtube.com/results?search_query=x&sp=CAI%253D" && src.every((s) => s[1] === "_blank"), JSON.stringify(src));
+  check("no script errors (searches)", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\npressing Scan nu twice");
 {
   const gh = fakeGitHub();
   const { page, context, errors } = await open(EDGE, { gh, data: { current: siteData() }, token: GOOD });

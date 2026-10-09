@@ -369,14 +369,58 @@ a { color: inherit; }
 /* The spellings searched for: the artist's own stylised name next to the plain one. */
 .spellings { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
 .spellings__list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.spellings__list li {
-  padding: 3px 9px;
+.spellings__list li { display: flex; min-width: 0; max-width: 100%; }
+/* Each spelling is a button: it shows where to open that search. */
+.spell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 9px 4px 11px;
   border-radius: 999px;
   border: 1px solid var(--line);
+  background: transparent;
   color: var(--ink-2);
+  font: inherit;
   font-size: var(--step--1);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+}
+.spell > span { overflow-wrap: anywhere; }
+.spell .icon { flex: none; width: 13px; height: 13px; color: var(--ink-3); }
+.spell[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); background: var(--panel); }
+.spell[aria-expanded="true"] .icon { color: var(--accent); }
+@media (hover: hover) { .spell:hover { border-color: var(--line-strong); color: var(--ink); } }
+
+.spell-open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  animation: rise 0.2s ease-out;
+}
+.spell-open__text { min-width: 0; overflow-wrap: anywhere; }
+.spell-open__text b { color: var(--ink); font-weight: 600; }
+.spell-open__links { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Title filters for names that are also common words. */
+.plate__rules { display: grid; gap: 3px; margin: 0; color: var(--ink-2); font-size: 0.8125rem; }
+.plate__rules b {
+  margin-right: 4px;
+  color: var(--ink-3);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .criteria {
@@ -937,10 +981,18 @@ a { color: inherit; }
 
 .sources { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .sources li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
-.sources .src__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.sources .src__label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink); text-decoration: none; }
+.sources .src__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sources a.src__label .icon { flex: none; width: 12px; height: 12px; color: var(--ink-3); }
+@media (hover: hover) {
+  .sources a.src__label:hover .src__text { text-decoration: underline; text-underline-offset: 3px; }
+  .sources a.src__label:hover .icon { color: var(--accent); }
+}
 .sources .src__result { color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; }
 .sources .src__error { grid-column: 2 / -1; color: var(--bad); font-size: 0.75rem; overflow-wrap: anywhere; }
 .foot__times { margin: 10px 0 0; color: var(--ink-3); }
+.foot__scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
+.foot__hint { color: var(--ink-3); font-size: 0.75rem; }
 
 .howto { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; }
 .foot__fine { color: var(--ink-3); margin: 0; }
@@ -1186,6 +1238,34 @@ html.has-sheet { overflow: hidden; }
 .field--error input { border-color: var(--bad); }
 
 .names, .since { display: grid; gap: 10px; min-width: 0; }
+
+/* A folded part of the form: "Undgå forkerte fund". */
+.more { padding-top: 14px; border-top: 1px solid var(--line); }
+.more > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  list-style: none;
+  cursor: pointer;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink);
+}
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin: -3px 4px 0 auto;
+  border-right: 2px solid var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+}
+.more[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+.more__hint { color: var(--ink-3); font-size: 0.75rem; font-weight: 500; }
+.more__body { display: grid; gap: 18px; padding-top: 10px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .chip {
   display: inline-flex;
