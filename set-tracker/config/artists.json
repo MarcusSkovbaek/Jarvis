@@ -133,6 +133,30 @@
       "links": {
         "youtube": "https://www.youtube.com/results?search_query=Sub+Focus&sp=CAI%253D"
       }
+    },
+    {
+      "id": "john-summit",
+      "aliases": [],
+      "name": "JOHN SUMMIT",
+      "displayName": "John Summit",
+      "subtitle": "JOHN SUMMIT",
+      "trackingSince": "2026-10-01T18:54:00Z",
+      "searchNames": [
+        "JOHN SUMMIT"
+      ],
+      "sources": {
+        "youtube": {
+          "searchQueries": [],
+          "channels": []
+        },
+        "soundcloud": {
+          "searchQueries": [],
+          "users": []
+        }
+      },
+      "links": {
+        "youtube": "https://www.youtube.com/results?search_query=JOHN+SUMMIT&sp=CAI%253D"
+      }
     }
   ]
 }
