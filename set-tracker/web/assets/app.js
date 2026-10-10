@@ -63,6 +63,7 @@
     loadedAt: 0,
     activity: null,      // set by admin.js while it follows a scan on GitHub
     spell: null,         // the spelling whose search links are showing
+    pendingMin: null,    // a minimum score saved in the app that the data does not have yet
     keep: new Set(),     // toggled while looking at a filter: stay put until the filter changes
     open: new Set(),     // expanded quality panels
     undo: null,
@@ -277,6 +278,11 @@
     setBusy(true);
     try {
       var res = await fetchData();
+      if (S.pendingMin !== null) {
+        // Until a scan has applied the new minimum, show its effect on the data as it is.
+        if ((res.data.settings || {}).minQualityScore === S.pendingMin) S.pendingMin = null;
+        else rethreshold(res.data, S.pendingMin);
+      }
       var changed = !S.data || JSON.stringify(acceptedIds(S.data)) !== JSON.stringify(acceptedIds(res.data));
       S.data = res.data;
       S.from = res.from;
@@ -300,6 +306,32 @@
       setBusy(false);
       render();
     }
+  }
+
+  // Rejected only for its score (data from before rejection codes says so in its reason).
+  function belowMinimum(it) {
+    if (it.status !== "rejected") return false;
+    if (it.rejection) return it.rejection === "score";
+    return /^Lydkvaliteten vurderes for lav/.test((it.reasons || [])[0] || "");
+  }
+
+  // What the scanner does with a changed minimum score, done on the data at hand.
+  function rethreshold(d, min) {
+    d.settings = Object.assign({}, d.settings, { minQualityScore: min });
+    d.items.forEach(function (it) {
+      var score = it.quality && typeof it.quality.score === "number" ? it.quality.score : null;
+      if (score === null) return;
+      if (it.status === "accepted" && score < min) {
+        it.status = "rejected";
+        it.rejection = "score";
+        it.reasons = ["Lydkvaliteten vurderes for lav (" + score + "/100, kræver " + min + ")"];
+      } else if (belowMinimum(it) && score >= min) {
+        it.status = "accepted";
+        delete it.reasons;
+        delete it.rejection;
+      }
+    });
+    return d;
   }
 
   function acceptedIds(d) {
@@ -513,10 +545,15 @@
       class: "criteria__edit", type: "button", "data-manage": many ? "list" : "start:" + shown[0].id,
       title: "Ret startdatoen", "aria-label": "Udgivet efter " + startText + ". Ret startdatoen"
     }, el("b", { text: "Udgivet efter" }), startText, icon("edit", "icon--s"));
+    var minScore = typeof s.minQualityScore === "number" ? s.minQualityScore : 60;
+    var soundChip = el("button", {
+      class: "criteria__edit", type: "button", "data-manage": "quality",
+      title: "Ret lydkravet", "aria-label": "Lyd mindst " + minScore + " ud af 100. Ret lydkravet"
+    }, el("b", { text: "Lyd" }), "mindst " + minScore + "/100", icon("edit", "icon--s"));
     append(plate, el("ul", { class: "criteria", "aria-label": "Krav" },
       el("li", { class: "criteria__start" }, startChip),
       el("li", null, el("b", { text: "Længde" }), "over " + (s.minDurationMinutes || 30) + " min"),
-      el("li", null, el("b", { text: "Lyd" }), "mindst " + (s.minQualityScore || 60) + "/100")));
+      el("li", { class: "criteria__start" }, soundChip)));
   }
 
   function renderControls() {
@@ -1021,6 +1058,9 @@
     render: render,
     toast: toast,
     setActivity: function (text) { S.activity = text || null; if (S.data) render(); else renderStatus(); },
+    // A new minimum score was saved: show its effect right away.
+    setThreshold: function (min) { S.pendingMin = min; if (S.data) { rethreshold(S.data, min); render(); } },
+    belowMinimum: belowMinimum,
     ui: { el: el, append: append, icon: icon, safeUrl: safeUrl, hasCJK: hasCJK, when: when,
           fmtDayYear: fmtDayYear, fmtTime: fmtTime, fmtFull: fmtFull, parseDate: parseDate }
   };

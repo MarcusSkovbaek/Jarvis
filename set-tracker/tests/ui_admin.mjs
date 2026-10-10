@@ -766,6 +766,92 @@ console.log("\nopening the other searches");
   await context.close();
 }
 
+console.log("\nthe minimum sound score");
+{
+  // Two shown sets (68 and 80), one left out for its score (55), one too short.
+  const withSets = () => {
+    const d = siteData();
+    d.items = [
+      Object.assign(acceptedItem("rio"), { title: "John Summit @ Rock In Rio 2026", quality: { score: 68, label: "God", verified: true, signals: [] } }),
+      Object.assign(acceptedItem("good"), { title: "Yousuke Yukimatsu @ Lot Radio", quality: { score: 80, label: "Meget god", verified: true, signals: [] } }),
+      Object.assign(acceptedItem("low"), { status: "rejected", rejection: "score", reasons: ["Lydkvaliteten vurderes for lav (55/100, kræver 60)"],
+        title: "Yousuke Yukimatsu phone", quality: { score: 55, label: "Under niveau", verified: true, signals: [] } }),
+      Object.assign(acceptedItem("short"), { status: "rejected", rejection: "short", reasons: ["For kort"], durationSec: 600,
+        title: "Yousuke Yukimatsu edit", quality: { score: 90, label: "Fremragende", verified: true, signals: [] } }),
+    ];
+    return d;
+  };
+  const data = { current: withSets() };
+  const gh = fakeGitHub({ onRunDone: () => {
+    // The scan applies the new minimum the same way.
+    data.current = withSets();
+    data.current.generatedAt = new Date().toISOString();
+    data.current.settings.minQualityScore = 70;
+    Object.assign(data.current.items[0], { status: "rejected", rejection: "score", reasons: ["Lydkvaliteten vurderes for lav (68/100, kræver 70)"] });
+  } });
+  const { page, context, errors } = await open(IPHONE, { gh, data, token: GOOD });
+  const shownIds = () => page.$$eval("#queue [data-open]", (ns) => [...new Set(ns.map((n) => n.getAttribute("data-open")))].sort());
+  check("both sets are shown at 60", JSON.stringify(await shownIds()) === JSON.stringify(["good", "rio"]), JSON.stringify(await shownIds()));
+  await page.click("[data-manage=quality]");
+  await page.waitForSelector("#q-min");
+  check("the sound minimum opens from the page", (await title(page)) === "Lydkrav" && (await page.inputValue("#q-min")) === "60");
+  check("its slider has focus", await page.evaluate(() => document.activeElement.id === "q-min"));
+  check("each set is a dot along the slider", (await page.locator(".qdot").count()) === 3 && (await page.locator(".qdot.is-in").count()) === 2);
+  const slide = (v) => page.$eval("#q-min", (el, v) => { el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); }, String(v));
+  await slide(70);
+  const preview = () => page.locator("#q-preview").innerText();
+  check("at 70 the 68 would go", /1 sæt\s+vises med 70/.test(await preview()) && /Flyttes til Frasorteret \(1\)[\s\S]*68[\s\S]*Rock In Rio/i.test(await preview()), await preview());
+  check("the number and its meaning follow", (await page.locator("#q-value").innerText()) === "70"
+    && /God lyd og bedre/.test(await page.locator("#q-label").innerText()));
+  check("screen readers hear what it means", (await page.getAttribute("#q-min", "aria-valuetext")) === "70 – 1 sæt vises");
+  await slide(50);
+  check("at 50 the 55 would come back, not the short one", /Kommer frem igen \(1\)[\s\S]*55/i.test(await preview()) && !/edit/.test(await preview()), await preview());
+  await page.click("[data-act=qpreset][data-min='70']");
+  check("shortcuts set the slider", (await page.inputValue("#q-min")) === "70");
+  check("the view fits a phone", (await sheetLayout(page)).length === 0, (await sheetLayout(page)).join(" | "));
+  await page.click(".more summary");
+  check("it explains what the score is made of", /Frekvensloft[\s\S]*15,5 kHz \+12[\s\S]*Bitrate/.test(await page.locator(".qexplain").innerText()));
+  await page.screenshot({ path: path.join(SHOTS, "admin-quality-iphone.png") });
+  await page.click("#q-save");
+  await page.waitForFunction(() => !document.getElementById("manage").open);
+  const cfg = gh.config();
+  check("the minimum is saved in the settings", cfg.settings.minQualityScore === 70
+    && JSON.stringify(Object.assign({}, cfg.settings, { minQualityScore: 60 })) === JSON.stringify(REAL_CONFIG.settings), JSON.stringify(cfg.settings));
+  check("the commit says so", gh.st.commits[0].message === "Sætradar: lydkrav mindst 70/100", gh.st.commits[0].message);
+  check("the page shows the effect at once", JSON.stringify(await shownIds()) === JSON.stringify(["good"])
+    && /mindst 70\/100/.test(await page.locator("[data-manage=quality]").innerText()));
+  // (Frasorteret is folded, so its text is read without rendering.)
+  check("the set that went is under Frasorteret with the reason",
+    /Rock In Rio[\s\S]*kræver 70/.test(await page.$eval("#crate-list", (n) => n.textContent)));
+  check("focus is back on the sound chip", await page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-manage") === "quality"));
+  // Older data from before the scan does not bring it back.
+  await page.evaluate(() => window.SetTracker.reload());
+  await settle(page, 300);
+  check("a reload before the scan keeps the new minimum", JSON.stringify(await shownIds()) === JSON.stringify(["good"]));
+  await page.waitForFunction(() => /Opdateret/.test(document.querySelector("#toast-text").textContent), null, { timeout: 15000 });
+  check("after the scan the data agrees", JSON.stringify(await shownIds()) === JSON.stringify(["good"])
+    && await page.evaluate(() => window.SetTracker.state.pendingMin === null));
+  await page.screenshot({ path: path.join(SHOTS, "page-after-quality-iphone.png") });
+  check("no script errors (minimum)", errors.length === 0, errors.join(" | "));
+  await context.close();
+
+  // Without a token: look and preview, then connect to save.
+  const gh2 = fakeGitHub();
+  const r2 = await open(EDGE, { gh: gh2, data: { current: withSets() } });
+  await r2.page.click("[data-manage=quality]");
+  await r2.page.waitForSelector("#q-min");
+  check("without a token the slider still previews", await r2.page.locator("#q-save").count() === 0
+    && await r2.page.locator("[data-act=connect-view][data-why=quality]").count() === 1);
+  await r2.page.screenshot({ path: path.join(SHOTS, "admin-quality-desktop.png") });
+  await r2.page.click("[data-act=connect-view]");
+  await r2.page.fill("#f-token", GOOD);
+  await r2.page.click("#f-connect");
+  await r2.page.waitForSelector("#q-save");
+  check("after connecting it returns to the sound minimum", (await title(r2.page)) === "Lydkrav");
+  check("no script errors (minimum, connect)", r2.errors.length === 0, r2.errors.join(" | "));
+  await r2.context.close();
+}
+
 console.log("\npressing Scan nu twice");
 {
   const gh = fakeGitHub();

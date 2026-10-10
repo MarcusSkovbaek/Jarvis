@@ -228,7 +228,10 @@ class Scanner:
         self.log = log
         self.health = []
         self.min_sec = int(self.settings.get("minDurationMinutes", 30)) * 60
-        self.min_score = int(self.settings.get("minQualityScore", 60))
+        try:
+            self.min_score = max(0, min(100, int(self.settings.get("minQualityScore", 60))))
+        except (TypeError, ValueError):
+            self.min_score = 60
         self.limit = int(self.settings.get("maxResultsPerQuery", 40))
         self.deep_limit = max(self.limit, int(self.settings.get("deepResultsPerQuery", 150)))
         # Judging an upload (details and a sound check) takes seconds to
@@ -334,9 +337,15 @@ class Scanner:
                 self.log(f"    {item['status']:9} {item['id']}  {item.get('title', '')[:70]} (title rule)")
 
     def evaluate(self, item, artist):
-        """Set status, reasons and quality on an item that is after the start date."""
+        """Set status, reasons and quality on an item that is after the start date.
+
+        A rejected item gets a `rejection` code too: short, title, unmeasured,
+        score (below the minimum, the one kind that follows a changed minimum),
+        pending, or reupload.
+        """
         item["checkedAt"] = iso(self.now)
         item.pop("reasons", None)
+        item.pop("rejection", None)
 
         if item.get("liveStatus") in LIVE or not item.get("durationSec"):
             item["status"] = "pending"
@@ -348,6 +357,7 @@ class Scanner:
 
         if item["durationSec"] <= self.min_sec:
             item["status"] = "rejected"
+            item["rejection"] = "short"
             item["reasons"] = [f"For kort ({round(item['durationSec'] / 60)} min – kræver over "
                                f"{self.min_sec // 60} min)"]
             return item
@@ -360,6 +370,7 @@ class Scanner:
             item["quality"] = {"score": score, "label": quality.label_for(score), "signals": signals,
                                "analysis": None, "verified": False, "analysisError": None}
             item["status"] = "rejected"
+            item["rejection"] = "title"
             item["reasons"] = [s["text"] for s in content[:3]]
             return item
 
@@ -387,14 +398,65 @@ class Scanner:
             # Without a measurement the score rests on words alone; that is
             # only good enough when the uploader can be trusted.
             item["status"] = "rejected"
+            item["rejection"] = "unmeasured"
             item["reasons"] = ["Lyden kunne ikke måles, og uploaderen er hverken kendt eller verificeret"]
         elif score >= self.min_score:
             item["status"] = "accepted"
         else:
-            item["status"] = "rejected"
-            worst = sorted((s for s in signals if s["impact"] < 0), key=lambda s: s["impact"])
-            item["reasons"] = [f"Lydkvaliteten vurderes for lav ({score}/100)"] + [s["text"] for s in worst[:3]]
+            self._reject_for_score(item)
         return item
+
+    def _reject_for_score(self, item):
+        q = item.get("quality") or {}
+        signals = q.get("signals") or []
+        # What pulled it down; with nothing negative, what held it back.
+        worst = sorted((s for s in signals if s["impact"] < 0), key=lambda s: s["impact"])[:3] or \
+            sorted((s for s in signals if s["impact"] < 6), key=lambda s: s["impact"])[:2]
+        item["status"] = "rejected"
+        item["rejection"] = "score"
+        item["reasons"] = ([f"Lydkvaliteten vurderes for lav ({q.get('score')}/100, kræver {self.min_score})"]
+                           + [s["text"] for s in worst])
+
+    @staticmethod
+    def _below_minimum(item):
+        """Rejected only for its score (also in data from before rejection codes)."""
+        if item.get("status") != "rejected":
+            return False
+        if item.get("rejection"):
+            return item["rejection"] == "score"
+        return (item.get("reasons") or [""])[0].startswith("Lydkvaliteten vurderes for lav")
+
+    def apply_threshold(self, artist):
+        """Sets on either side of the minimum score follow it when it is changed.
+
+        Returns the ids of sets that now count, to be checked for reuploads and
+        duplicates like new ones.
+        """
+        now_in = set()
+        mine = [it for it in self.items.values() if it.get("artistId") == artist["id"]]
+        for item in mine:
+            score = (item.get("quality") or {}).get("score")
+            if not isinstance(score, (int, float)):
+                continue
+            if item.get("status") == "accepted" and score < self.min_score:
+                self._reject_for_score(item)
+                self.log(f"    rejected  {item['id']}  below the new minimum ({score} < {self.min_score})")
+            elif self._below_minimum(item) and score >= self.min_score:
+                item["status"] = "accepted"
+                item.pop("reasons", None)
+                item.pop("rejection", None)
+                now_in.add(item["id"])
+                self.log(f"    accepted  {item['id']}  above the new minimum ({score} >= {self.min_score})")
+        # A copy whose original no longer counts stands on its own score.
+        for item in mine:
+            primary = self.items.get(item.get("duplicateOf"))
+            score = (item.get("quality") or {}).get("score")
+            if (item.get("status") == "duplicate" and (not primary or primary.get("status") != "accepted")
+                    and isinstance(score, (int, float)) and score >= self.min_score):
+                item["status"] = "accepted"
+                item.pop("duplicateOf", None)
+                now_in.add(item["id"])
+        return now_in
 
     def consider(self, item, artist, since, first_run):
         """Decide what to do with one search result. Returns the stored item or None."""
@@ -470,6 +532,7 @@ class Scanner:
             started = parse_time(item.get("pendingSince")) or self.now
             if self.now - started > timedelta(days=max_days):
                 item["status"] = "rejected"
+                item["rejection"] = "pending"
                 item["reasons"] = (["Livestreamen blev aldrig afsluttet eller gjort tilgængelig"]
                                    if item.get("liveStatus") in LIVE
                                    else [f"Længden kunne ikke aflæses i {max_days} dage"])
@@ -496,6 +559,7 @@ class Scanner:
             old = next((s for s in older if matching.same_recording(item, s, aliases)), None)
             if old:
                 item["status"] = "rejected"
+                item["rejection"] = "reupload"
                 item["reasons"] = [f"Genupload af et ældre sæt (“{old.get('title', '')[:80]}”)"]
                 continue
             primary = next((p for p in self.items.values()
@@ -640,7 +704,8 @@ class Scanner:
                     handled.add(stored["id"])
             self.recheck_pending(artist, since, handled)
             self.recheck_titles(artist)
-            self.dedupe(artist, handled)
+            now_in = self.apply_threshold(artist)
+            self.dedupe(artist, handled | now_in)
             self.baselined.update(answered)
             waiting = self.deferred.get(artist["id"], 0)
             if waiting:

@@ -51,7 +51,8 @@
     formSha: null,      // the version of the file the form was filled from
     dirty: false,       // something typed or picked in the form since
     dispatching: false,
-    why: null           // "scan": the connect view was opened to start a scan
+    why: null,          // "scan" or "quality": what the connect view was opened for
+    minDraft: null      // the minimum score being picked in the "Lydkrav" view
   };
 
   /* --------------------------------------------------------------- auth */
@@ -292,6 +293,7 @@
     if ((view === "form") && (READ_ONLY || !A.auth)) view = READ_ONLY ? "list" : "connect";
     A.view = view;
     if (view === "form") startForm(opts.id || null, opts.focus || null);
+    if (view === "quality") A.minDraft = null;
     if (A.auth && !READ_ONLY && !A.file) A.loading = true;   // loadConfig below; no flash of "Prøv igen"
     A.pendingFocus = true;
     render(true);
@@ -337,7 +339,14 @@
     root.classList.remove("has-sheet");
     A.view = "list";
     A.error = null;
-    if (A.opener && A.opener.focus && document.contains(A.opener)) A.opener.focus({ preventScroll: true });
+    // The button that opened the sheet may have been drawn anew meanwhile: find its successor.
+    var back = A.opener;
+    if (back && back.getAttribute && !document.contains(back)) {
+      var key = back.id ? "#" + CSS.escape(back.id)
+        : back.getAttribute("data-manage") ? '[data-manage="' + CSS.escape(back.getAttribute("data-manage")) + '"]' : null;
+      back = key ? document.querySelector(key) : null;
+    }
+    if (back && back.focus && document.contains(back)) back.focus({ preventScroll: true });
   });
   // A tap on the dimmed backdrop closes the sheet; a text selection that
   // merely ends out there (pressed inside, released outside) does not.
@@ -368,6 +377,7 @@
     var target = null;
     if (A.view === "form") target = body.querySelector(A.focus === "since" ? "#f-since" : "#f-name");
     else if (A.view === "connect") target = body.querySelector("#f-token");
+    else if (A.view === "quality") target = body.querySelector("#q-min");
     if (target) {
       A.pendingFocus = false;
       target.focus({ preventScroll: false });
@@ -383,16 +393,21 @@
   function render(fresh) {
     if (!dialog) return;
     backBtn.hidden = A.view === "list";
-    titleEl.textContent = A.view === "connect" ? "Forbind GitHub"
+    titleEl.textContent = A.view === "connect" ? "Forbind GitHub" : A.view === "quality" ? "Lydkrav"
       : A.view === "form" ? (A.editing ? "Ret overvågning" : "Ny overvågning") : "Overvågninger";
     if (!fresh && A.view === "form" && body.querySelector("form")) {
       renderFormState();
+      return;
+    }
+    if (!fresh && A.view === "quality" && body.querySelector("#q-min")) {
+      updateQuality();     // never rebuilt under a finger on the slider
       return;
     }
     keepFocus(function () {
       body.textContent = "";
       if (A.view === "connect") renderConnect();
       else if (A.view === "form") renderForm();
+      else if (A.view === "quality") renderQuality();
       else renderList();
     });
   }
@@ -645,6 +660,171 @@
     append(body, form);
   }
 
+  /* ------------------------------------------------------ sound minimum */
+
+  var Q_MIN = 40, Q_MAX = 95;
+
+  function currentMin() {
+    var v = ST.state.data && ST.state.data.settings && ST.state.data.settings.minQualityScore;
+    return typeof v === "number" ? v : 60;
+  }
+
+  function scoreOf(it) { return it.quality && typeof it.quality.score === "number" ? it.quality.score : null; }
+
+  // Sets that follow the minimum: shown now, or left out only for their score.
+  function scored() {
+    var items = (ST.state.data && ST.state.data.items) || [];
+    return items.filter(function (it) {
+      return scoreOf(it) !== null && (it.status === "accepted" || ST.belowMinimum(it));
+    });
+  }
+
+  // What a minimum would show and leave out, from the sets the page knows about.
+  function qualityPreview(min) {
+    var out = { shown: 0, going: [], coming: [] };
+    scored().forEach(function (it) {
+      var sc = scoreOf(it);
+      if (it.status === "accepted" && sc < min) out.going.push(it);
+      else if (it.status !== "accepted" && sc >= min) { out.coming.push(it); out.shown++; }
+      else if (it.status === "accepted") out.shown++;
+    });
+    var byScore = function (a, b) { return scoreOf(b) - scoreOf(a); };
+    out.going.sort(byScore);
+    out.coming.sort(byScore);
+    return out;
+  }
+
+  function scoreLabel(min) {
+    if (min >= 85) return "Kun fremragende lyd";
+    if (min >= 72) return "Meget god lyd og bedre";
+    if (min >= 60) return "God lyd og bedre";
+    return "Også lyd under niveau";
+  }
+
+  // Along the slider: where 0..1 of the way sits, the thumb's width taken into account.
+  function along(v) { return Math.max(0, Math.min(1, (v - Q_MIN) / (Q_MAX - Q_MIN))); }
+
+  function renderQuality() {
+    if (A.minDraft === null) A.minDraft = Math.max(Q_MIN, Math.min(Q_MAX, currentMin()));
+    append(body, el("p", { class: "sheet__lead", text: "Et sæt vises kun, når lydscoren er mindst:" }));
+    var slider = el("input", { type: "range", id: "q-min", min: String(Q_MIN), max: String(Q_MAX), step: "1",
+      value: String(A.minDraft), "aria-label": "Mindste lydscore" });
+    append(body, el("div", { class: "qmin" },
+      el("div", { class: "qmin__top" },
+        el("output", { class: "qmin__value", id: "q-value", for: "q-min" }),
+        el("span", { class: "qmin__of", text: "/100" }),
+        el("span", { class: "qmin__label", id: "q-label" })),
+      el("div", { class: "qmin__track" }, slider, el("div", { class: "qmin__dots", id: "q-dots", "aria-hidden": "true" })),
+      el("div", { class: "qmin__scale", "aria-hidden": "true" }, [40, 60, 72, 85, 95].map(function (v) {
+        return el("span", { style: "--at:" + along(v), text: String(v) });
+      })),
+      el("div", { class: "presets", role: "group", "aria-label": "Hurtigvalg" },
+        [[60, "Standard (60)"], [70, "Strengere (70)"], [80, "Kun den bedste (80)"]].map(function (p) {
+          return el("button", { class: "preset", type: "button", "data-act": "qpreset", "data-min": String(p[0]), text: p[1] });
+        }))));
+    append(body, el("div", { class: "qmin__preview", id: "q-preview" }));
+    append(body, el("div", { class: "sheet__error-slot", id: "q-error" }));
+    if (READ_ONLY) {
+      append(body, el("p", { class: "sheet__note", text: "I eksempelvisningen kan lydkravet ikke ændres." }));
+    } else if (!A.auth) {
+      append(body, el("div", { class: "sheet__card sheet__card--quiet" },
+        el("p", null, "Kravet gælder alle kunstnere og gemmes i dit GitHub-repo, så det gælder på alle dine enheder. Det kræver, at appen er forbundet."),
+        el("button", { class: "btn btn--play", type: "button", "data-act": "connect-view", "data-why": "quality", text: "Forbind GitHub" })));
+    } else {
+      append(body, el("p", { class: "sheet__note", text: "Gælder alle kunstnere og alle dine enheder. Siden viser ændringen med det samme, og en scanning bekræfter den." }));
+      append(body, el("div", { class: "sheet__actions" },
+        el("button", { class: "btn btn--play", type: "button", "data-act": "qsave", id: "q-save" }, el("span", { text: "Gem lydkrav" })),
+        el("button", { class: "btn btn--quiet", type: "button", "data-act": "cancel", text: "Annuller" })));
+    }
+    append(body, explainScore());
+    updateQuality();
+  }
+
+  function updateQuality() {
+    var slider = body.querySelector("#q-min");
+    if (!slider) return;
+    var min = A.minDraft, cur = currentMin();
+    var p = qualityPreview(min);
+    slider.style.setProperty("--fill", along(min));
+    // Read out on every step by screen readers: the value and what it means.
+    slider.setAttribute("aria-valuetext", min + " – " + (p.shown === 1 ? "1 sæt vises" : p.shown + " sæt vises"));
+    body.querySelector("#q-value").textContent = String(min);
+    body.querySelector("#q-label").textContent = scoreLabel(min);
+    var dots = body.querySelector("#q-dots");
+    dots.textContent = "";
+    scored().forEach(function (it) {
+      append(dots, el("span", { class: "qdot" + (scoreOf(it) >= min ? " is-in" : ""), style: "--at:" + along(scoreOf(it)) }));
+    });
+    var box = body.querySelector("#q-preview");
+    box.textContent = "";
+    append(box, el("p", { class: "qmin__count" },
+      el("b", { text: p.shown === 1 ? "1 sæt" : p.shown + " sæt" }), " vises med " + min + (min === cur ? " (som nu)." : ".")));
+    if (p.going.length) append(box, setGroup("Flyttes til Frasorteret", p.going));
+    if (p.coming.length) append(box, setGroup("Kommer frem igen", p.coming));
+    var save = body.querySelector("#q-save");
+    if (save) {
+      save.setAttribute("aria-disabled", A.busy || min === cur ? "true" : "false");
+      save.querySelector("span").textContent = A.busy ? "Gemmer …" : "Gem lydkrav";
+    }
+    var slot = body.querySelector("#q-error");
+    if (slot) { slot.textContent = ""; append(slot, errorBox(A.error)); }
+  }
+
+  function setGroup(title, list) {
+    var ul = el("ul", { class: "qmin__sets" });
+    list.slice(0, 5).forEach(function (it) {
+      append(ul, el("li", null, el("span", { class: "qmin__score", text: String(scoreOf(it)) }),
+        el("span", { class: "qmin__title", lang: ui.hasCJK(it.title) ? "ja" : null, text: it.title || it.id })));
+    });
+    if (list.length > 5) append(ul, el("li", { class: "qmin__more", text: "og " + (list.length - 5) + " flere" }));
+    return el("div", { class: "qmin__group" }, el("p", { class: "qmin__groupname", text: title + " (" + list.length + ")" }), ul);
+  }
+
+  // The answer to "what is the score made of", kept next to the control.
+  function explainScore() {
+    var rows = [
+      ["Frekvensloft", "over 15,5 kHz +12 · 13–15,5 kHz +3 · 10–13 kHz −15 · under 10 kHz −40"],
+      ["Bas", "fyldig +3 · svag (typisk telefon eller rum) −15"],
+      ["Clipping", "let forvrængning −8 · kraftig −25"],
+      ["Stilhed", "stille passager −8 · lange stille passager −30"],
+      ["Lydstyrke og stereo", "meget lav lydstyrke −15 · mono −6"],
+      ["Uploader", "kunstneren selv eller en kendt platform +12 · verificeret kanal +6"],
+      ["Bitrate", "høj +4 · god +3 · standard 0 · lav −8 · meget lav −25"],
+      ["Titlen", "“DJ set”, “live set” m.fl. +3 · “part 2” −8 · genupload −20 · telefon- eller publikumsoptagelse, klip, interview, reaktionsvideo, en anden DJ's mix −30 til −45"]
+    ];
+    return el("details", { class: "more" },
+      el("summary", null, el("span", { text: "Sådan regnes lydscoren ud" })),
+      el("div", { class: "more__body" },
+        el("p", { class: "field__hint", text: "Scoren starter på 62. De første fem punkter måles på to lydudsnit à 45 sekunder, 30 % og 65 % inde i sættet." }),
+        el("dl", { class: "qexplain" }, rows.map(function (r) { return [el("dt", { text: r[0] }), el("dd", { text: r[1] })]; })),
+        el("p", { class: "field__hint", text: "Kan lyden ikke måles, kræves det, at uploaderen er kunstneren selv, en kendt platform eller en verificeret kanal. Hvert sæt viser under sin lydmåler præcis, hvad der talte." })));
+  }
+
+  async function saveQuality() {
+    var min = A.minDraft;
+    if (A.busy || min === currentMin()) return;
+    A.busy = true;
+    A.error = null;
+    updateQuality();
+    try {
+      var sha = await commit(function (cfg) {
+        cfg.settings = Object.assign({}, cfg.settings, { minQualityScore: min });
+        return cfg;
+      }, "Sætradar: lydkrav mindst " + min + "/100");
+      A.busy = false;
+      A.minDraft = null;
+      ST.setThreshold(min);
+      close();
+      notify("Lydkravet er nu mindst " + min + "/100.");
+      follow({ sha: sha });
+    } catch (e) {
+      A.busy = false;
+      A.error = e.message;
+      if (e.status === 401) disconnect(true);
+      else updateQuality();
+    }
+  }
+
   /* ------------------------------------------------------------- actions */
 
   function readForm() {
@@ -825,6 +1005,7 @@
       A.view = "list";
       A.busy = false;
       notify("Forbundet som " + A.auth.login);
+      if (A.why === "quality") { A.view = "quality"; A.why = null; }
       render(true);
       syncPage();
       loadConfig(true);
@@ -1003,6 +1184,7 @@
     else if (what === "add") open("form", { id: null });
     else if (what.indexOf("start:") === 0) open(A.auth && !READ_ONLY ? "form" : "list", { id: what.slice(6), focus: "since" });
     else if (what.indexOf("edit:") === 0) open("form", { id: what.slice(5) });
+    else if (what === "quality") open("quality");
   });
 
   document.getElementById("manage-close").addEventListener("click", close);
@@ -1021,10 +1203,20 @@
     var act = b.getAttribute("data-act");
     if (act === "save" || act === "connect") return;      // handled by the form's submit
     e.preventDefault();
-    if (act === "connect-view") { A.view = "connect"; A.error = null; A.pendingFocus = true; render(true); focusFirst(); }
+    if (act === "connect-view") {
+      A.why = b.getAttribute("data-why") || A.why;
+      A.view = "connect"; A.error = null; A.pendingFocus = true; render(true); focusFirst();
+    }
+    else if (act === "qpreset") {
+      A.minDraft = Number(b.getAttribute("data-min"));
+      body.querySelector("#q-min").value = String(A.minDraft);
+      updateQuality();
+    }
+    else if (act === "qsave") saveQuality();
     else if (act === "disconnect") disconnect(false);
     else if (act === "add") { A.view = "form"; startForm(null, null); A.pendingFocus = true; render(true); focusFirst(); }
     else if (act === "edit") { A.view = "form"; startForm(b.getAttribute("data-id"), null); A.pendingFocus = true; render(true); focusFirst(); }
+    else if (act === "cancel" && A.view === "quality") close();
     else if (act === "cancel") { A.view = "list"; A.why = null; A.error = null; render(true); }
     else if (act === "add-name") addPendingName();
     else if (act === "drop-name") dropName(Number(b.getAttribute("data-index")));
@@ -1054,6 +1246,11 @@
   });
 
   body.addEventListener("input", function (e) {
+    if (A.view === "quality" && e.target && e.target.id === "q-min") {
+      A.minDraft = Number(e.target.value);
+      updateQuality();
+      return;
+    }
     if (A.view !== "form" || !e.target || !e.target.form) return;
     A.dirty = true;
     // A field's error goes as soon as it is being corrected.

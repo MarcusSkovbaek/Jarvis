@@ -81,11 +81,19 @@ som en app**.
 Scoren starter på 62 og flyttes op og ned af det, der bliver fundet. Under
 **Lyd**-måleren på hvert sæt kan du se præcis hvilke fund, der talte.
 
+Et sæt vises, når scoren er mindst **60** (God). Grænsen ændres i appen: tryk
+på **Lyd mindst …** i toppen af siden, træk i skyderen og se med det samme,
+hvilke sæt der flyttes til eller fra **Frasorteret**. Grænsen gælder alle
+kunstnere, gemmes som `minQualityScore` i `config/artists.json` (så den
+gælder på alle enheder) og bliver brugt på allerede fundne sæt ved næste
+scanning. Er et sæt også lagt op et andet sted med bedre lyd, træder den
+kopi i stedet, når originalen falder under grænsen.
+
 | Hvad | Effekt |
 |---|---|
 | Uploadet af kunstneren selv eller en kendt platform (Boiler Room, NTS, HÖR, The Lot Radio, …) | +12 |
 | Uploadet af en verificeret YouTube-kanal (fx en festival) | +6 |
-| Lyd helt op til 15,5 kHz eller mere | +12 |
+| Lyd helt op til 15,5 kHz eller mere / til 13–15,5 kHz | +12 / +3 |
 | Fyldig bas | +3 |
 | God/høj bitrate | +3 / +4 |
 | Titlen siger "phone", "crowd recording", "snippet", "interview", … | −30 til −45 |

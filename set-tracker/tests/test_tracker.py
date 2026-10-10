@@ -1031,6 +1031,60 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(by_id(out2)["sc:g"]["quality"]["score"], 80)
         self.assertFalse([c for c in f2.calls if c[0] == "analyze"])
 
+    def _with_min(self, minimum):
+        return dict(copy.deepcopy(CONFIG), settings=dict(CONFIG["settings"], minQualityScore=minimum))
+
+    def test_changing_the_minimum_score_moves_sets_both_ways(self):
+        rio = dict(sc("rio", "John Summit @ Rock In Rio 2026", 89, uploader="Chris"), artistId="yy", status="accepted",
+                   quality={"score": 68, "signals": [{"code": "bitrate", "impact": 0, "text": "Standard bitrate (128 kbps mp3)"},
+                                                     {"code": "bandwidth", "impact": 3, "text": "Næsten fuld frekvensgengivelse"},
+                                                     {"code": "bass", "impact": 3, "text": "Fyldig bas"}]})
+        low = dict(sc("low", "Yousuke Yukimatsu live", 90), artistId="yy", status="rejected", rejection="score",
+                   reasons=["Lydkvaliteten vurderes for lav (55/100, kræver 60)"],
+                   quality={"score": 55, "signals": [{"code": "thin", "impact": -15, "text": "Svag bas"}]})
+        short = dict(sc("short", "Yousuke Yukimatsu edit", 20), artistId="yy", status="rejected", rejection="short",
+                     reasons=["For kort"], quality={"score": 90, "signals": []})
+        unmeasured = dict(yt("u", "Yousuke Yukimatsu set", 70), artistId="yy", status="rejected", rejection="unmeasured",
+                          reasons=["Lyden kunne ikke måles"], quality={"score": 64, "signals": []})
+        # Before rejection codes existed, the reason text said it.
+        legacy = dict(sc("old", "Yousuke Yukimatsu at Circus", 120), artistId="yy", status="rejected",
+                      reasons=["Lydkvaliteten vurderes for lav (52/100)", "Svag bas"], quality={"score": 52, "signals": []})
+        data = {"items": [rio, low, short, unmeasured, legacy]}
+        # Raised to 70: the 68 goes, with the minimum and what held it back.
+        f = FakeFetcher()
+        _, out = scan(f, data=copy.deepcopy(data), config=self._with_min(70))
+        items = by_id(out)
+        self.assertEqual(items["sc:rio"]["status"], "rejected")
+        self.assertEqual(items["sc:rio"]["rejection"], "score")
+        self.assertEqual(items["sc:rio"]["reasons"],
+                         ["Lydkvaliteten vurderes for lav (68/100, kræver 70)", "Standard bitrate (128 kbps mp3)",
+                          "Næsten fuld frekvensgengivelse"])
+        self.assertEqual(out["settings"]["minQualityScore"], 70)
+        self.assertFalse([c for c in f.calls if c[0] in ("enrich", "analyze")])
+        # Lowered to 50: back in, and so are the 55 and the 52; the rest stay out.
+        _, out2 = scan(FakeFetcher(), data=out, now=NOW + timedelta(hours=2), config=self._with_min(50))
+        items2 = by_id(out2)
+        self.assertEqual({i for i, it in items2.items() if it["status"] == "accepted"}, {"sc:rio", "sc:low", "sc:old"})
+        self.assertNotIn("reasons", items2["sc:low"])
+        self.assertEqual(items2["sc:short"]["status"], "rejected")
+        self.assertEqual(items2["yt:u"]["status"], "rejected")
+
+    def test_a_copy_takes_over_when_the_original_drops_below_the_minimum(self):
+        original = dict(sc("a", "Yousuke Yukimatsu @ Lot Radio", 60), artistId="yy", status="accepted",
+                        quality={"score": 68, "signals": []})
+        copy_ = dict(yt("b", "Yousuke Yukimatsu - Lot Radio", 60), artistId="yy", status="duplicate", duplicateOf="sc:a",
+                     quality={"score": 80, "signals": []})
+        _, out = scan(FakeFetcher(), data={"items": [original, copy_]}, config=self._with_min(75))
+        items = by_id(out)
+        self.assertEqual(items["sc:a"]["status"], "rejected")
+        self.assertEqual(items["yt:b"]["status"], "accepted")
+        self.assertNotIn("duplicateOf", items["yt:b"])
+
+    def test_a_broken_minimum_falls_back_to_60(self):
+        for value in ("high", None, 250):
+            s, out = scan(FakeFetcher(), config=self._with_min(value))
+            self.assertEqual(out["settings"]["minQualityScore"], 100 if value == 250 else 60)
+
     def test_filters_must_be_lists_of_words(self):
         bad = self._worship(mustMention="Sub Focus")
         ready, problems = pipeline.prepare_config(self._cfg(copy.deepcopy(ARTIST), bad))
