@@ -179,6 +179,33 @@
       "links": {
         "youtube": "https://www.youtube.com/results?search_query=JOHN+SUMMIT&sp=CAI%253D"
       }
+    },
+    {
+      "id": "swedish-house-mafia",
+      "aliases": [],
+      "name": "Swedish House Mafia",
+      "displayName": "Swedish House Mafia",
+      "subtitle": "",
+      "trackingSince": "2026-10-01T08:25:00Z",
+      "searchNames": [
+        "Swedish House Mafia",
+        "Steve Angello",
+        "Sebastian Ingrosso",
+        "Axwell"
+      ],
+      "sources": {
+        "youtube": {
+          "searchQueries": [],
+          "channels": []
+        },
+        "soundcloud": {
+          "searchQueries": [],
+          "users": []
+        }
+      },
+      "links": {
+        "youtube": "https://www.youtube.com/results?search_query=Swedish+House+Mafia&sp=CAI%253D"
+      }
     }
   ]
 }
